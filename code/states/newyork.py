@@ -1,15 +1,10 @@
-"""New York filing runner for the Online_Compliance_Bot project.
-
-This module intentionally avoids standard label-based selectors because the NY
-holder portal renders form controls in row/container layouts where `<label for>`
-bindings can be inconsistent.
-"""
+"""New York filing runner for the Online_Compliance_Bot project."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Optional
 
 from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeoutError
 
@@ -17,7 +12,7 @@ NY_HOLDER_INFO_URL = "https://ouf.osc.ny.gov/app/holder-info"
 
 
 class NewYorkAutomationError(RuntimeError):
-    """Raised when a required NY form control cannot be located or used."""
+    """Raised when NY automation cannot reliably continue."""
 
 
 @dataclass(frozen=True)
@@ -62,6 +57,90 @@ _RADIO_FIELDS: tuple[_FieldSpec, ...] = (
 
 _FOREIGN_ADDRESS_LABEL = "Check for Foreign Address"
 
+# US states + territories / armed forces mail regions.
+STATE_MAP: dict[str, str] = {
+    "AL": "Alabama",
+    "AK": "Alaska",
+    "AZ": "Arizona",
+    "AR": "Arkansas",
+    "CA": "California",
+    "CO": "Colorado",
+    "CT": "Connecticut",
+    "DE": "Delaware",
+    "DC": "District of Columbia",
+    "FL": "Florida",
+    "GA": "Georgia",
+    "HI": "Hawaii",
+    "ID": "Idaho",
+    "IL": "Illinois",
+    "IN": "Indiana",
+    "IA": "Iowa",
+    "KS": "Kansas",
+    "KY": "Kentucky",
+    "LA": "Louisiana",
+    "ME": "Maine",
+    "MD": "Maryland",
+    "MA": "Massachusetts",
+    "MI": "Michigan",
+    "MN": "Minnesota",
+    "MS": "Mississippi",
+    "MO": "Missouri",
+    "MT": "Montana",
+    "NE": "Nebraska",
+    "NV": "Nevada",
+    "NH": "New Hampshire",
+    "NJ": "New Jersey",
+    "NM": "New Mexico",
+    "NY": "New York",
+    "NC": "North Carolina",
+    "ND": "North Dakota",
+    "OH": "Ohio",
+    "OK": "Oklahoma",
+    "OR": "Oregon",
+    "PA": "Pennsylvania",
+    "RI": "Rhode Island",
+    "SC": "South Carolina",
+    "SD": "South Dakota",
+    "TN": "Tennessee",
+    "TX": "Texas",
+    "UT": "Utah",
+    "VT": "Vermont",
+    "VA": "Virginia",
+    "WA": "Washington",
+    "WV": "West Virginia",
+    "WI": "Wisconsin",
+    "WY": "Wyoming",
+    "AS": "American Samoa",
+    "GU": "Guam",
+    "MP": "Northern Mariana Islands",
+    "PR": "Puerto Rico",
+    "VI": "U.S. Virgin Islands",
+    "UM": "U.S. Minor Outlying Islands",
+    "FM": "Federated States of Micronesia",
+    "MH": "Marshall Islands",
+    "PW": "Palau",
+    "AA": "Armed Forces Americas",
+    "AE": "Armed Forces Europe",
+    "AP": "Armed Forces Pacific",
+}
+
+_COUNTRY_MAP: dict[str, str] = {
+    "": "United States of America",
+    "US": "United States of America",
+    "USA": "United States of America",
+    "UNITED STATES": "United States of America",
+    "UNITED STATES OF AMERICA": "United States of America",
+}
+
+_FUNDS_REMITTED_MAP: dict[str, str] = {
+    "EFT": "Electronic Funds Transfer",
+    "ELECTRONIC FUNDS TRANSFER": "Electronic Funds Transfer",
+    "CHECK": "Check",
+    "CHK": "Check",
+    "NYS JOURNAL ENTRY": "NYS Journal Entry",
+    "JOURNAL ENTRY": "NYS Journal Entry",
+}
+
 
 # ----- Public runner -------------------------------------------------------
 
@@ -73,10 +152,7 @@ def run(
     *,
     wait_after_navigation_ms: int = 1500,
 ) -> None:
-    """Run New York workflow through upload step and stop at preview/signature.
-
-    The workflow intentionally does NOT sign or submit.
-    """
+    """Run NY workflow through upload step, then stop before signature/submit."""
     record = _merge_records(holder_row, payment_row)
     naupa_path = Path(naupa_file_path).expanduser().resolve()
 
@@ -86,39 +162,58 @@ def run(
     page.goto(NY_HOLDER_INFO_URL, wait_until="domcontentloaded")
     page.wait_for_timeout(wait_after_navigation_ms)
 
-    _fill_holder_info_page(page, record)
-    _click_next(page)
+    errors: list[str] = []
+    _fill_holder_info_page(page, record, errors)
 
+    if errors:
+        raise NewYorkAutomationError(
+            "NY holder-info form completed with errors:\n- " + "\n- ".join(errors)
+        )
+
+    _click_next(page)
     _upload_naupa_file(page, naupa_path)
     _click_next(page)
 
 
-# Alias helpers for compatibility with different registries.
 run_newyork = run
 run_newyork_filing = run
 
 
 # ----- Page actions --------------------------------------------------------
 
-def _fill_holder_info_page(page: Page, record: Dict[str, Any]) -> None:
+def _fill_holder_info_page(page: Page, record: Dict[str, Any], errors: list[str]) -> None:
     for field in _TEXT_FIELDS:
         value = _as_string(record.get(field.key))
-        if value:
-            _fill_text_by_row_label(page, field.label, value)
+        if not value:
+            continue
+        _guarded(errors, f"text '{field.label}'", lambda: _fill_text_by_row_label(page, field.label, value))
 
     for field in _SELECT_FIELDS:
         value = _as_string(record.get(field.key))
-        if value:
-            _select_dropdown_by_row_label(page, field.label, value)
+        mapped = _map_select_value(field.key, value)
+
+        # Country defaults to United States of America if blank.
+        if field.key == "country" and not mapped:
+            mapped = "United States of America"
+
+        if not mapped:
+            continue
+
+        _guarded(errors, f"dropdown '{field.label}'", lambda: _select_dropdown_by_row_label(page, field.label, mapped))
 
     for field in _RADIO_FIELDS:
         value = _as_bool(record.get(field.key))
-        if value is not None:
-            _set_yes_no_radio_by_row_label(page, field.label, value)
+        if value is None:
+            continue
+        _guarded(errors, f"radio '{field.label}'", lambda: _set_yes_no_radio_by_row_label(page, field.label, value))
 
     foreign_address = _as_bool(record.get("foreign_address"))
-    if foreign_address is not None:
-        _set_checkbox_by_row_label(page, _FOREIGN_ADDRESS_LABEL, foreign_address)
+    if foreign_address:
+        _guarded(
+            errors,
+            f"checkbox '{_FOREIGN_ADDRESS_LABEL}'",
+            lambda: _set_checkbox_by_row_label(page, _FOREIGN_ADDRESS_LABEL, should_check=True),
+        )
 
 
 def _upload_naupa_file(page: Page, file_path: Path) -> None:
@@ -140,21 +235,27 @@ def _click_next(page: Page) -> None:
     )
 
     for candidate in candidates:
-        if candidate.count() > 0:
-            target = candidate.first
-            if target.is_enabled():
-                target.click(timeout=10_000)
-                page.wait_for_timeout(1000)
-                return
+        if candidate.count() <= 0:
+            continue
+
+        target = candidate.first
+        if not target.is_enabled():
+            continue
+
+        target.click(timeout=10_000)
+        page.wait_for_timeout(1000)
+        return
 
     raise NewYorkAutomationError("Could not find a clickable 'Next' control on NY page.")
 
 
-# ----- Container/row-based field helpers ----------------------------------
+# ----- Container-based field helpers --------------------------------------
 
 def _fill_text_by_row_label(page: Page, label_text: str, value: str) -> None:
-    row = _find_row_container(page, label_text)
-    input_locator = row.locator("input:not([type='radio']):not([type='checkbox']):not([type='file']), textarea").first
+    container = _find_field_container(page, label_text)
+    input_locator = container.locator(
+        "input[type='text'], input[type='tel'], input[type='email'], input:not([type]), textarea"
+    ).first
 
     if input_locator.count() == 0:
         raise NewYorkAutomationError(f"Text input not found for label containing '{label_text}'.")
@@ -164,72 +265,42 @@ def _fill_text_by_row_label(page: Page, label_text: str, value: str) -> None:
 
 
 def _select_dropdown_by_row_label(page: Page, label_text: str, value: str) -> None:
-    row = _find_row_container(page, label_text)
-    select_locator = row.locator("select").first
+    container = _find_field_container(page, label_text)
+    select_locator = container.locator("select").first
 
     if select_locator.count() == 0:
         raise NewYorkAutomationError(f"Dropdown/select not found for label containing '{label_text}'.")
 
     select_locator.scroll_into_view_if_needed()
 
-    # Try by value first, then label. Avoid fill() for dropdowns.
-    try:
-        select_locator.select_option(value=value)
-        return
-    except Exception:
-        pass
-
+    # Required behavior: select_option(label=...) for dropdowns.
     try:
         select_locator.select_option(label=value)
-        return
     except Exception as exc:
         raise NewYorkAutomationError(
-            f"Unable to select '{value}' for dropdown containing label '{label_text}'."
+            f"Unable to select option label '{value}' for dropdown '{label_text}'."
         ) from exc
 
 
-def _set_yes_no_radio_by_row_label(page: Page, label_text: str, is_yes: bool) -> None:
-    row = _find_row_container(page, label_text)
-    radios = row.locator("input[type='radio']")
+def _set_yes_no_radio_by_row_label(page: Page, label_text: str, yes_value: bool) -> None:
+    container = _find_field_container(page, label_text)
+    radios = container.locator("input[type='radio']")
     count = radios.count()
 
     if count == 0:
         raise NewYorkAutomationError(f"Radio inputs not found for label containing '{label_text}'.")
 
-    desired_tokens: Iterable[str] = ("yes", "true") if is_yes else ("no", "false")
-
-    # 1) Prefer radio with matching value/id/name markers.
-    for i in range(count):
-        radio = radios.nth(i)
-        metadata = " ".join(
-            filter(
-                None,
-                [
-                    _safe_attr(radio, "value"),
-                    _safe_attr(radio, "id"),
-                    _safe_attr(radio, "name"),
-                    _safe_attr(radio, "aria-label"),
-                ],
-            )
-        ).lower()
-
-        if any(token in metadata for token in desired_tokens):
-            if _click_radio_via_for_label(row, radio):
-                return
-            radio.set_checked(True, force=True)
-            return
-
-    # 2) Fallback: assume first=Yes, second=No.
-    fallback_index = 0 if is_yes else min(1, count - 1)
-    fallback_radio = radios.nth(fallback_index)
-    if _click_radio_via_for_label(row, fallback_radio):
+    target = _pick_radio_by_semantics(radios, yes_value)
+    if _click_radio_label_for_input(container, target):
         return
-    fallback_radio.set_checked(True, force=True)
+
+    # Fallback required by spec.
+    target.set_checked(True, force=True)
 
 
 def _set_checkbox_by_row_label(page: Page, label_text: str, should_check: bool) -> None:
-    row = _find_row_container(page, label_text)
-    checkbox = row.locator("input[type='checkbox']").first
+    container = _find_field_container(page, label_text)
+    checkbox = container.locator("input[type='checkbox']").first
 
     if checkbox.count() == 0:
         raise NewYorkAutomationError(f"Checkbox not found for label containing '{label_text}'.")
@@ -237,56 +308,116 @@ def _set_checkbox_by_row_label(page: Page, label_text: str, should_check: bool) 
     checkbox.set_checked(should_check, force=True)
 
 
-def _find_row_container(page: Page, label_text: str) -> Locator:
-    label_node = _find_label_node(page, label_text)
+def _find_field_container(page: Page, label_text: str) -> Locator:
+    normalized = _normalize_label(label_text)
+    search_token = normalized.split()[0] if normalized else normalized
+    if not search_token:
+        raise NewYorkAutomationError("Empty label text after normalization.")
 
-    # Walk up to a likely row/container and return first visible match.
-    for xpath in (
-        "xpath=ancestor::*[self::div or self::tr][.//input or .//select or .//textarea][1]",
-        "xpath=ancestor::*[.//input or .//select or .//textarea][1]",
-    ):
-        container = label_node.locator(xpath).first
+    # Label text locator using contains(), as required.
+    label_nodes = page.locator(
+        f"xpath=//*[contains(translate(normalize-space(string(.)), "
+        f"'ABCDEFGHIJKLMNOPQRSTUVWXYZ*:', 'abcdefghijklmnopqrstuvwxyz  '), '{search_token}')]"
+    )
+
+    for i in range(label_nodes.count()):
+        candidate = label_nodes.nth(i)
+        if not candidate.is_visible():
+            continue
+
+        container = candidate.locator("xpath=ancestor::div[.//input or .//select or .//textarea][1]").first
         if container.count() > 0 and container.is_visible():
             return container
 
-    raise NewYorkAutomationError(f"Could not find row container for label containing '{label_text}'.")
+        # fallback: one more level up in case input/select lives in adjacent child container.
+        parent = candidate.locator("xpath=ancestor::div[1]").first
+        if parent.count() > 0 and parent.is_visible() and _container_has_form_control(parent):
+            return parent
+
+    raise NewYorkAutomationError(f"Could not find form container for label '{label_text}'.")
 
 
-def _find_label_node(page: Page, label_text: str) -> Locator:
-    # Match both strict and loose variants because NY labels may include * and : suffixes.
-    escaped = label_text.replace(' ', r'\s+')
-    patterns = [
-        f"text={label_text}",
-        f"text=/{escaped}/i",
-    ]
-
-    for pattern in patterns:
-        loc = page.locator(pattern).first
-        if loc.count() > 0 and loc.is_visible():
-            return loc
-
-    # Strong fallback: any element containing text.
-    fallback = page.locator(f"xpath=//*[contains(normalize-space(.), '{label_text}')] ").first
-    if fallback.count() > 0 and fallback.is_visible():
-        return fallback
-
-    raise NewYorkAutomationError(f"Could not find visible label text containing '{label_text}'.")
+def _container_has_form_control(container: Locator) -> bool:
+    return container.locator("input, select, textarea").count() > 0
 
 
-def _click_radio_via_for_label(row: Locator, radio: Locator) -> bool:
+def _pick_radio_by_semantics(radios: Locator, yes_value: bool) -> Locator:
+    desired = ("yes", "true", "1") if yes_value else ("no", "false", "0")
+
+    for i in range(radios.count()):
+        radio = radios.nth(i)
+        tokens = " ".join(
+            [
+                _safe_attr(radio, "value"),
+                _safe_attr(radio, "id"),
+                _safe_attr(radio, "name"),
+                _safe_attr(radio, "aria-label"),
+            ]
+        ).lower()
+        if any(token in tokens for token in desired):
+            return radio
+
+    # fallback convention: first=yes, second=no
+    index = 0 if yes_value else min(1, radios.count() - 1)
+    return radios.nth(index)
+
+
+def _click_radio_label_for_input(container: Locator, radio: Locator) -> bool:
     radio_id = _safe_attr(radio, "id")
-    if not radio_id:
-        return False
+    if radio_id:
+        label_for = container.locator(f"label[for='{radio_id}']").first
+        if label_for.count() > 0 and label_for.is_visible():
+            label_for.click(force=True)
+            return True
 
-    label_for_radio = row.locator(f"label[for='{radio_id}']").first
-    if label_for_radio.count() == 0 or not label_for_radio.is_visible():
-        return False
+    # fallback: try nearest sibling label.
+    sibling_label = radio.locator("xpath=following-sibling::label[1]").first
+    if sibling_label.count() > 0 and sibling_label.is_visible():
+        sibling_label.click(force=True)
+        return True
 
-    label_for_radio.click(force=True)
-    return True
+    parent_label = radio.locator("xpath=ancestor::label[1]").first
+    if parent_label.count() > 0 and parent_label.is_visible():
+        parent_label.click(force=True)
+        return True
+
+    return False
 
 
-# ----- Value normalization --------------------------------------------------
+# ----- Normalization + mapping --------------------------------------------
+
+def _normalize_label(text: str) -> str:
+    return " ".join(text.replace("*", "").replace(":", "").strip().lower().split())
+
+
+def _map_select_value(field_key: str, value: str) -> str:
+    if not value:
+        return ""
+
+    raw = value.strip()
+    upper = raw.upper()
+
+    if field_key == "state":
+        return STATE_MAP.get(upper, raw)
+
+    if field_key == "country":
+        return _COUNTRY_MAP.get(upper, raw)
+
+    if field_key == "funds_remitted_via":
+        return _FUNDS_REMITTED_MAP.get(upper, raw)
+
+    # report_type/report_year pass through as-is.
+    return raw
+
+
+def _guarded(errors: list[str], field_desc: str, action: callable) -> None:
+    try:
+        action()
+    except Exception as exc:
+        message = f"Failed to set {field_desc}: {exc}"
+        print(f"NY automation warning: {message}")
+        errors.append(message)
+
 
 def _merge_records(holder_row: Dict[str, Any], payment_row: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(holder_row)
