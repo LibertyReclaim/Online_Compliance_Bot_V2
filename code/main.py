@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import traceback
 from typing import Any
 
 from playwright.sync_api import sync_playwright
@@ -83,7 +84,19 @@ def run() -> None:
 
             runner = get_state_runner(state_code)
             page = browser.new_page()
-            runner(page=page, holder_row=holder, payment_row=payment, naupa_file_path=naupa_path)
+
+            try:
+                runner(page=page, holder_row=holder, payment_row=payment, naupa_file_path=naupa_path)
+            except Exception:
+                print("\n=== AUTOMATION ERROR ===")
+                print(traceback.format_exc())
+                print(
+                    "Automation failed. Browser will stay open for manual review. "
+                    "Inspect the current page, then press Enter to close browser and exit."
+                )
+                input("Press Enter to close the browser and exit...")
+                browser.close()
+                return
 
             print(
                 f"NY flow reached post-upload step for payment_id={payment.get('payment_id')}. "
