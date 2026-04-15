@@ -128,9 +128,17 @@ run_newyork_filing = run
 
 def _fill_holder_info_page(page: Page, record: Dict[str, Any], errors: list[str]) -> None:
     for field in _TEXT_FIELDS:
-        value = _resolve_holder_id_value(record) if field.key == "holder_id" else _as_string(record.get(field.key))
+        if field.key == "holder_id":
+            value = _resolve_holder_id_value(record)
+            print(f"internal id: {_as_string(record.get('id'))}")
+            print(f"holder_id: {_as_string(record.get('holder_id'))}")
+            print(f"filling website Holder ID with: {value}")
+        else:
+            value = _as_string(record.get(field.key))
+
         if not value:
             continue
+
         _guarded(errors, f"text '{field.label}'", lambda: _fill_text_by_row_label(page, field.label, value))
 
     for field in _SELECT_FIELDS:

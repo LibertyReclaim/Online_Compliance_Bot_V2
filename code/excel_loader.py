@@ -21,7 +21,7 @@ def load_holder_records(project_root: Path) -> list[dict[str, Any]]:
 
     New structure:
     - `id` is the internal merge key.
-    - `holder_id` is the external website field value and may be blank.
+    - `holder_id` is the website Holder ID value (may be blank).
     """
     holder_path = project_root / HOLDER_FILE_NAME
     _require_exists(holder_path)
@@ -29,15 +29,13 @@ def load_holder_records(project_root: Path) -> list[dict[str, Any]]:
     holder_df = pd.read_excel(holder_path)
     holder_df = _clean_dataframe(holder_df)
 
-    _require_columns(holder_df, required_columns=["id", "company_name"], workbook_name=HOLDER_FILE_NAME)
+    _require_columns(
+        holder_df,
+        required_columns=["id", "company_name", "holder_id"],
+        workbook_name=HOLDER_FILE_NAME,
+    )
 
-    if "holder_id" not in holder_df.columns:
-        holder_df["holder_id"] = ""
-
-    # Backward-compatible alias for legacy merge code paths.
-    # This keeps runtime stable while `id` is the actual canonical merge key.
-    holder_df["holder_id"] = holder_df["holder_id"].where(holder_df["holder_id"] != "", holder_df["id"])
-
+    # Preserve columns as-is; do not alias/overwrite id <-> holder_id.
     return holder_df.to_dict(orient="records")
 
 
@@ -46,7 +44,6 @@ def load_payment_records(project_root: Path) -> list[dict[str, Any]]:
 
     New structure:
     - `id` is the internal merge key to holder workbook.
-    - payment workbook no longer carries merge `holder_id`.
     """
     payment_path = project_root / PAYMENT_FILE_NAME
     _require_exists(payment_path)
@@ -60,10 +57,7 @@ def load_payment_records(project_root: Path) -> list[dict[str, Any]]:
         workbook_name=PAYMENT_FILE_NAME,
     )
 
-    # Backward-compatible alias for legacy merge code paths.
-    # Value is derived from `id`; old workbook `holder_id` is no longer required.
-    payment_df["holder_id"] = payment_df["id"]
-
+    # Preserve columns as-is; do not alias/overwrite id <-> holder_id.
     return payment_df.to_dict(orient="records")
 
 
