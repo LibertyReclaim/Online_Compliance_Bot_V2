@@ -133,6 +133,9 @@ def _fill_holder_info_page(page: Page, record: Dict[str, Any], errors: list[str]
             print(f"internal id: {_as_string(record.get('id'))}")
             print(f"holder_id: {_as_string(record.get('holder_id'))}")
             print(f"filling Holder ID with: {value}")
+        elif field.key in {"email", "email_confirmation"}:
+            value = record.get("email")
+            print("Filling Email fields with:", value)
         else:
             value = _as_string(record.get(field.key))
 
