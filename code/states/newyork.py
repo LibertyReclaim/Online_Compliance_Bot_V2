@@ -173,15 +173,53 @@ def _resolve_holder_id_value(record: Dict[str, Any]) -> str:
 
 
 def _upload_naupa_file(page: Page, file_path: Path) -> None:
-    file_input = page.locator("input[type='file']").first
+    print(f"Using NAUPA file: {file_path}")
+
     try:
-        file_input.wait_for(state="visible", timeout=20_000)
-    except PlaywrightTimeoutError as exc:
-        raise NewYorkAutomationError("Could not find visible file upload input on NY upload page.") from exc
+        page.wait_for_url("**/app/holder-upload**", timeout=20_000)
+    except PlaywrightTimeoutError:
+        # Fallback: upload page may still render controls before URL settles.
+        page.wait_for_timeout(1500)
 
-    _debug_action("Upload File", str(file_path), "input[type='file']")
-    file_input.set_input_files(str(file_path))
+    clicked_add_document = _click_add_document_if_present(page)
 
+    file_inputs = page.locator("input[type='file']")
+    found_file_input = file_inputs.count() > 0
+    print(f"Found NY upload input: {'yes' if found_file_input else 'no'}")
+    print(f"Clicked ADD DOCUMENT: {'yes' if clicked_add_document else 'no'}")
+
+    if not found_file_input:
+        raise NewYorkAutomationError("Could not find NY upload file input (input[type='file']).")
+
+    print("Uploading NAUPA file...")
+    file_inputs.first.set_input_files(str(file_path))
+    print("Upload complete.")
+
+    # Let the page register the uploaded document before continuing.
+    page.wait_for_timeout(1200)
+
+
+
+def _click_add_document_if_present(page: Page) -> bool:
+    candidates = (
+        page.get_by_role("button", name="ADD DOCUMENT", exact=False),
+        page.locator("button:has-text('ADD DOCUMENT')"),
+        page.locator("text=ADD DOCUMENT").locator("xpath=ancestor::button[1]"),
+    )
+
+    for candidate in candidates:
+        if candidate.count() <= 0:
+            continue
+
+        button = candidate.first
+        if not button.is_visible() or not button.is_enabled():
+            continue
+
+        button.click(timeout=10_000)
+        page.wait_for_timeout(500)
+        return True
+
+    return False
 
 def _click_next(page: Page) -> None:
     candidates = (
