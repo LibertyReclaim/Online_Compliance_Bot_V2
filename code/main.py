@@ -18,12 +18,12 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def _index_holders_by_id(holder_records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+def _index_holders_by_internal_id(holder_records: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     indexed: dict[str, dict[str, Any]] = {}
     for holder in holder_records:
-        holder_id = str(holder.get("holder_id", "")).strip()
-        if holder_id:
-            indexed[holder_id] = holder
+        internal_id = str(holder.get("id", "")).strip()
+        if internal_id:
+            indexed[internal_id] = holder
     return indexed
 
 
@@ -42,14 +42,14 @@ def run() -> None:
 
     holder_records = load_holder_records(project_root)
     payment_records = load_payment_records(project_root)
-    holders_by_id = _index_holders_by_id(holder_records)
+    holders_by_internal_id = _index_holders_by_internal_id(holder_records)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
 
         for payment in payment_records:
             state_code = str(payment.get("state_code", "")).strip().upper()
-            holder_id = str(payment.get("holder_id", "")).strip()
+            internal_id = str(payment.get("id", "")).strip()
             company_name = str(payment.get("company_name", "")).strip()
             report_year = payment.get("report_year", "")
 
@@ -57,13 +57,13 @@ def run() -> None:
                 print(f"Skipping payment_id={payment.get('payment_id')} (missing state_code)")
                 continue
 
-            if not holder_id:
-                print(f"Skipping payment_id={payment.get('payment_id')} (missing holder_id)")
+            if not internal_id:
+                print(f"Skipping payment_id={payment.get('payment_id')} (missing internal id)")
                 continue
 
-            holder = holders_by_id.get(holder_id)
+            holder = holders_by_internal_id.get(internal_id)
             if holder is None:
-                print(f"Skipping payment_id={payment.get('payment_id')} (holder_id '{holder_id}' not found)")
+                print(f"Skipping payment_id={payment.get('payment_id')} (internal id '{internal_id}' not found)")
                 continue
 
             if not company_name:
@@ -79,7 +79,7 @@ def run() -> None:
             report_kind = "negative" if _is_negative_report(payment.get("amount_to_remit")) else "positive"
             print(
                 f"Running payment_id={payment.get('payment_id')} state={state_code} "
-                f"holder_id={holder_id} report={report_kind} naupa='{naupa_path}'"
+                f"internal_id={internal_id} report={report_kind} naupa='{naupa_path}'"
             )
 
             runner = get_state_runner(state_code)
