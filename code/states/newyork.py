@@ -181,17 +181,28 @@ def _upload_naupa_file(page: Page, file_path: Path) -> None:
         # Fallback: upload page may still render controls before URL settles.
         page.wait_for_timeout(1500)
 
+    file_inputs = page.locator("input[type='file']")
+    found_before_click = file_inputs.count() > 0
+    print(f"Found NY upload input before clicking ADD DOCUMENT: {'yes' if found_before_click else 'no'}")
+
+    if found_before_click:
+        print("Using direct set_input_files without opening file picker.")
+        file_inputs.first.set_input_files(str(file_path))
+        print("Upload complete.")
+        page.wait_for_timeout(1200)
+        return
+
     clicked_add_document = _click_add_document_if_present(page)
+    print(f"Clicked ADD DOCUMENT as fallback: {'yes' if clicked_add_document else 'no'}")
 
     file_inputs = page.locator("input[type='file']")
-    found_file_input = file_inputs.count() > 0
-    print(f"Found NY upload input: {'yes' if found_file_input else 'no'}")
-    print(f"Clicked ADD DOCUMENT: {'yes' if clicked_add_document else 'no'}")
+    found_after_click = file_inputs.count() > 0
+    print(f"Found NY upload input after fallback click: {'yes' if found_after_click else 'no'}")
 
-    if not found_file_input:
+    if not found_after_click:
         raise NewYorkAutomationError("Could not find NY upload file input (input[type='file']).")
 
-    print("Uploading NAUPA file...")
+    print("Uploading with fallback flow.")
     file_inputs.first.set_input_files(str(file_path))
     print("Upload complete.")
 
