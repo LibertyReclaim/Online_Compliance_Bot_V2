@@ -158,8 +158,7 @@ def _fill_holder_info_page(page: Page, record: Dict[str, Any], errors: list[str]
 
 
 def _resolve_holder_id_value(record: Dict[str, Any]) -> str:
-    holder_id_value = _as_string(record.get("holder_id"))
-    return holder_id_value if holder_id_value else _as_string(record.get("id"))
+    return _as_string(record.get("holder_id"))
 
 
 def _upload_naupa_file(page: Page, file_path: Path) -> None:
