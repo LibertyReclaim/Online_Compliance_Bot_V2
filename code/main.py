@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import asyncio
 import traceback
+from pathlib import Path
 from typing import Any
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Page, sync_playwright
 
 from excel_loader import load_holder_records, load_payment_records
 from path_utils import build_naupa_path
@@ -37,7 +38,27 @@ def _is_negative_report(amount_to_remit: Any) -> bool:
         return False
 
 
-def run() -> None:
+def _run_state_sync(page: Page, holder: dict[str, Any], payment: dict[str, Any], naupa_path: Path) -> None:
+    runner = get_state_runner(str(payment.get("state_code", "")).strip().upper())
+    runner(page=page, holder_row=holder, payment_row=payment, naupa_file_path=naupa_path)
+
+
+async def _run_state_task(page: Page, holder: dict[str, Any], payment: dict[str, Any], naupa_path: Path) -> None:
+    state_code = str(payment.get("state_code", "")).strip().upper()
+    print(f"Starting {state_code} in new tab...")
+
+    try:
+        await asyncio.to_thread(_run_state_sync, page, holder, payment, naupa_path)
+        print(f"{state_code} finished - waiting for manual signature")
+    except Exception:
+        print(f"\n=== AUTOMATION ERROR ({state_code}) ===")
+        print(traceback.format_exc())
+        print(
+            "Automation failed for this state tab. Browser will remain open so you can manually inspect the page."
+        )
+
+
+async def run() -> None:
     project_root = _project_root()
 
     holder_records = load_holder_records(project_root)
@@ -46,6 +67,8 @@ def run() -> None:
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=False)
+
+        tasks: list[asyncio.Task[None]] = []
 
         for payment in payment_records:
             state_code = str(payment.get("state_code", "")).strip().upper()
@@ -78,35 +101,22 @@ def run() -> None:
 
             report_kind = "negative" if _is_negative_report(payment.get("amount_to_remit")) else "positive"
             print(
-                f"Running payment_id={payment.get('payment_id')} state={state_code} "
+                f"Queueing payment_id={payment.get('payment_id')} state={state_code} "
                 f"internal_id={internal_id} report={report_kind} naupa='{naupa_path}'"
             )
 
-            runner = get_state_runner(state_code)
             page = browser.new_page()
+            tasks.append(asyncio.create_task(_run_state_task(page, holder, payment, naupa_path)))
 
-            try:
-                runner(page=page, holder_row=holder, payment_row=payment, naupa_file_path=naupa_path)
-            except Exception:
-                print("\n=== AUTOMATION ERROR ===")
-                print(traceback.format_exc())
-                print(
-                    "Automation failed. Browser will stay open for manual review. "
-                    "Inspect the current page, then press Enter to close browser and exit."
-                )
-                input("Press Enter to close the browser and exit...")
-                browser.close()
-                return
+        if tasks:
+            await asyncio.gather(*tasks)
+        else:
+            print("No valid payment rows to run.")
 
-            print(
-                f"NY flow reached post-upload step for payment_id={payment.get('payment_id')}. "
-                "Review preview/signature page manually in the open browser window."
-            )
-
-        print("All payment rows processed. Browser will remain open for manual review.")
+        print("All state tabs processed. Browser will remain open for manual review/signature.")
         input("Press Enter to close the browser and exit...")
         browser.close()
 
 
 if __name__ == "__main__":
-    run()
+    asyncio.run(run())
