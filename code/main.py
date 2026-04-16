@@ -12,7 +12,7 @@ from playwright.async_api import Page, async_playwright
 
 from excel_loader import load_holder_records, load_payment_records
 from path_utils import build_naupa_path
-from state_registry import get_state_runner
+from state_registry import get_registered_states, get_state_runner
 
 
 def _project_root() -> Path:
@@ -41,26 +41,31 @@ def _is_negative_report(amount_to_remit: Any) -> bool:
 
 async def _run_state_task(page: Page, holder: dict[str, Any], payment: dict[str, Any], naupa_path: Path) -> None:
     state_code = str(payment.get("state_code", "")).strip().upper()
+    payment_id = payment.get("payment_id")
     print(f"Starting {state_code} in new tab...")
 
     try:
+        print(f"Dispatching state runner for payment_id={payment_id}, state={state_code}")
         runner = get_state_runner(state_code)
+        runner_name = getattr(runner, "__qualname__", getattr(runner, "__name__", str(runner)))
+        runner_module = getattr(runner, "__module__", "")
+        print(f"Selected runner: {runner_module}.{runner_name}")
+
+        if state_code == "CA":
+            print("Starting CA navigation...")
+
         result = runner(page=page, holder_row=holder, payment_row=payment, naupa_file_path=naupa_path)
 
         if inspect.isawaitable(result):
             await result
         else:
-            raise TypeError(
-                f"State runner for {state_code} must be async when using async Playwright."
-            )
+            raise TypeError(f"State runner for {state_code} must be async when using async Playwright.")
 
         print(f"{state_code} finished - waiting for manual signature")
     except Exception:
         print(f"\n=== AUTOMATION ERROR ({state_code}) ===")
         print(traceback.format_exc())
-        print(
-            "Automation failed for this state tab. Browser will remain open so you can manually inspect the page."
-        )
+        print("Automation failed for this state tab. Browser will remain open so you can manually inspect the page.")
 
 
 async def run() -> None:
@@ -69,6 +74,8 @@ async def run() -> None:
     holder_records = load_holder_records(project_root)
     payment_records = load_payment_records(project_root)
     holders_by_internal_id = _index_holders_by_internal_id(holder_records)
+
+    print(f"Registered states: {', '.join(get_registered_states())}")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
@@ -119,8 +126,15 @@ async def run() -> None:
             print("No valid payment rows to run.")
 
         print("All state tabs processed. Browser will remain open for manual review/signature.")
-        input("Press Enter to close the browser and exit...")
-        await browser.close()
+        print("Press Ctrl+C to close browser and exit.")
+
+        try:
+            while True:
+                await asyncio.sleep(3600)
+        except KeyboardInterrupt:
+            print("\nShutdown requested by user. Closing browser...")
+        finally:
+            await browser.close()
 
 
 if __name__ == "__main__":
