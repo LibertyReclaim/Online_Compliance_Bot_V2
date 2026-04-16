@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from playwright.sync_api import Locator, Page, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import Locator, Page, TimeoutError as PlaywrightTimeoutError
 
 NY_HOLDER_INFO_URL = "https://ouf.osc.ny.gov/app/holder-info"
 
@@ -93,7 +93,7 @@ _FUNDS_REMITTED_MAP: dict[str, str] = {
 }
 
 
-def run(
+async def run(
     page: Page,
     holder_row: Dict[str, Any],
     payment_row: Dict[str, Any],
@@ -108,25 +108,25 @@ def run(
     if not naupa_path.exists():
         raise FileNotFoundError(f"NAUPA file not found: {naupa_path}")
 
-    page.goto(NY_HOLDER_INFO_URL, wait_until="domcontentloaded")
-    page.wait_for_timeout(wait_after_navigation_ms)
+    await page.goto(NY_HOLDER_INFO_URL, wait_until="domcontentloaded")
+    await page.wait_for_timeout(wait_after_navigation_ms)
 
     errors: list[str] = []
-    _fill_holder_info_page(page, record, errors)
+    await _fill_holder_info_page(page, record, errors)
 
     if errors:
         raise NewYorkAutomationError("NY holder-info form completed with errors:\n- " + "\n- ".join(errors))
 
-    _click_next(page)
-    _upload_naupa_file(page, naupa_path)
-    _click_next(page)
+    await _click_next(page)
+    await _upload_naupa_file(page, naupa_path)
+    await _click_next(page)
 
 
 run_newyork = run
 run_newyork_filing = run
 
 
-def _fill_holder_info_page(page: Page, record: Dict[str, Any], errors: list[str]) -> None:
+async def _fill_holder_info_page(page: Page, record: Dict[str, Any], errors: list[str]) -> None:
     for field in _TEXT_FIELDS:
         if field.key == "holder_id":
             value = _resolve_holder_id_value(record)
@@ -142,7 +142,7 @@ def _fill_holder_info_page(page: Page, record: Dict[str, Any], errors: list[str]
         if not value:
             continue
 
-        _guarded(errors, f"text '{field.label}'", lambda: _fill_text_by_row_label(page, field.label, value))
+        await _guarded(errors, f"text '{field.label}'", lambda: _fill_text_by_row_label(page, field.label, value))
 
     for field in _SELECT_FIELDS:
         value = _as_string(record.get(field.key))
@@ -151,17 +151,25 @@ def _fill_holder_info_page(page: Page, record: Dict[str, Any], errors: list[str]
             mapped = "United States of America"
         if not mapped:
             continue
-        _guarded(errors, f"dropdown '{field.label}'", lambda: _select_dropdown_by_row_label(page, field.label, mapped))
+        await _guarded(
+            errors,
+            f"dropdown '{field.label}'",
+            lambda: _select_dropdown_by_row_label(page, field.label, mapped),
+        )
 
     for field in _RADIO_FIELDS:
         bool_value = _as_bool(record.get(field.key))
         if bool_value is None:
             continue
-        _guarded(errors, f"radio '{field.label}'", lambda: _set_yes_no_radio_by_row_label(page, field.label, bool_value))
+        await _guarded(
+            errors,
+            f"radio '{field.label}'",
+            lambda: _set_yes_no_radio_by_row_label(page, field.label, bool_value),
+        )
 
     foreign_address = _as_bool(record.get("foreign_address"))
     if foreign_address:
-        _guarded(
+        await _guarded(
             errors,
             f"checkbox '{_FOREIGN_ADDRESS_LABEL}'",
             lambda: _set_checkbox_by_row_label(page, _FOREIGN_ADDRESS_LABEL, should_check=True),
@@ -172,46 +180,45 @@ def _resolve_holder_id_value(record: Dict[str, Any]) -> str:
     return _as_string(record.get("holder_id"))
 
 
-def _upload_naupa_file(page: Page, file_path: Path) -> None:
+async def _upload_naupa_file(page: Page, file_path: Path) -> None:
     print(f"Using NAUPA file: {file_path}")
 
     try:
-        page.wait_for_url("**/app/holder-upload**", timeout=20_000)
+        await page.wait_for_url("**/app/holder-upload**", timeout=20_000)
     except PlaywrightTimeoutError:
         # Fallback: upload page may still render controls before URL settles.
-        page.wait_for_timeout(1500)
+        await page.wait_for_timeout(1500)
 
     file_inputs = page.locator("input[type='file']")
-    found_before_click = file_inputs.count() > 0
+    found_before_click = (await file_inputs.count()) > 0
     print(f"Found NY upload input before clicking ADD DOCUMENT: {'yes' if found_before_click else 'no'}")
 
     if found_before_click:
         print("Using direct set_input_files without opening file picker.")
-        file_inputs.first.set_input_files(str(file_path))
+        await file_inputs.first.set_input_files(str(file_path))
         print("Upload complete.")
-        page.wait_for_timeout(1200)
+        await page.wait_for_timeout(1200)
         return
 
-    clicked_add_document = _click_add_document_if_present(page)
+    clicked_add_document = await _click_add_document_if_present(page)
     print(f"Clicked ADD DOCUMENT as fallback: {'yes' if clicked_add_document else 'no'}")
 
     file_inputs = page.locator("input[type='file']")
-    found_after_click = file_inputs.count() > 0
+    found_after_click = (await file_inputs.count()) > 0
     print(f"Found NY upload input after fallback click: {'yes' if found_after_click else 'no'}")
 
     if not found_after_click:
         raise NewYorkAutomationError("Could not find NY upload file input (input[type='file']).")
 
     print("Uploading with fallback flow.")
-    file_inputs.first.set_input_files(str(file_path))
+    await file_inputs.first.set_input_files(str(file_path))
     print("Upload complete.")
 
     # Let the page register the uploaded document before continuing.
-    page.wait_for_timeout(1200)
+    await page.wait_for_timeout(1200)
 
 
-
-def _click_add_document_if_present(page: Page) -> bool:
+async def _click_add_document_if_present(page: Page) -> bool:
     candidates = (
         page.get_by_role("button", name="ADD DOCUMENT", exact=False),
         page.locator("button:has-text('ADD DOCUMENT')"),
@@ -219,20 +226,21 @@ def _click_add_document_if_present(page: Page) -> bool:
     )
 
     for candidate in candidates:
-        if candidate.count() <= 0:
+        if await candidate.count() <= 0:
             continue
 
         button = candidate.first
-        if not button.is_visible() or not button.is_enabled():
+        if not await button.is_visible() or not await button.is_enabled():
             continue
 
-        button.click(timeout=10_000)
-        page.wait_for_timeout(500)
+        await button.click(timeout=10_000)
+        await page.wait_for_timeout(500)
         return True
 
     return False
 
-def _click_next(page: Page) -> None:
+
+async def _click_next(page: Page) -> None:
     candidates = (
         page.get_by_role("button", name="Next", exact=True),
         page.locator("button:has-text('Next')"),
@@ -240,75 +248,75 @@ def _click_next(page: Page) -> None:
         page.locator("text=Next").locator("xpath=ancestor::button[1]"),
     )
     for candidate in candidates:
-        if candidate.count() <= 0:
+        if await candidate.count() <= 0:
             continue
         target = candidate.first
-        if not target.is_enabled():
+        if not await target.is_enabled():
             continue
         _debug_action("Click Next", "Next", "button/input:Next")
-        target.click(timeout=10_000)
-        page.wait_for_timeout(1000)
+        await target.click(timeout=10_000)
+        await page.wait_for_timeout(1000)
         return
     raise NewYorkAutomationError("Could not find a clickable 'Next' control on NY page.")
 
 
-def _fill_text_by_row_label(page: Page, label_text: str, value: str) -> None:
-    row = _find_field_row(page, label_text)
+async def _fill_text_by_row_label(page: Page, label_text: str, value: str) -> None:
+    row = await _find_field_row(page, label_text)
     input_locator = row.locator(
         "input[type='text'], input[type='tel'], input[type='email'], input:not([type]), textarea"
     ).first
-    if input_locator.count() == 0:
+    if await input_locator.count() == 0:
         raise NewYorkAutomationError(f"Text input not found for exact label '{label_text}'.")
 
-    row_info = _row_debug_descriptor(row)
+    row_info = await _row_debug_descriptor(row)
     _debug_action(label_text, value, f"row={row_info} -> text_input")
-    input_locator.scroll_into_view_if_needed()
-    input_locator.fill(value)
+    await input_locator.scroll_into_view_if_needed()
+    await input_locator.fill(value)
 
 
-def _select_dropdown_by_row_label(page: Page, label_text: str, value: str) -> None:
-    row = _find_field_row(page, label_text)
+async def _select_dropdown_by_row_label(page: Page, label_text: str, value: str) -> None:
+    row = await _find_field_row(page, label_text)
     select_locator = row.locator("select").first
-    if select_locator.count() == 0:
+    if await select_locator.count() == 0:
         raise NewYorkAutomationError(f"Dropdown/select not found for exact label '{label_text}'.")
 
-    row_info = _row_debug_descriptor(row)
+    row_info = await _row_debug_descriptor(row)
     _debug_action(label_text, value, f"row={row_info} -> select")
-    select_locator.scroll_into_view_if_needed()
+    await select_locator.scroll_into_view_if_needed()
     try:
-        select_locator.select_option(label=value)
+        await select_locator.select_option(label=value)
     except Exception as exc:
         raise NewYorkAutomationError(f"Unable to select option label '{value}' for dropdown '{label_text}'.") from exc
 
 
-def _set_yes_no_radio_by_row_label(page: Page, label_text: str, yes_value: bool) -> None:
-    row = _find_field_row(page, label_text)
+async def _set_yes_no_radio_by_row_label(page: Page, label_text: str, yes_value: bool) -> None:
+    row = await _find_field_row(page, label_text)
     radios = row.locator("input[type='radio']")
-    if radios.count() == 0:
+    if await radios.count() == 0:
         raise NewYorkAutomationError(f"Radio inputs not found for exact label '{label_text}'.")
 
-    target = _pick_radio_by_semantics(radios, yes_value)
-    row_info = _row_debug_descriptor(row)
+    target = await _pick_radio_by_semantics(radios, yes_value)
+    row_info = await _row_debug_descriptor(row)
     _debug_action(label_text, str(yes_value), f"row={row_info} -> radio")
 
-    if _click_radio_label_for_input(row, target):
+    if await _click_radio_label_for_input(row, target):
         return
-    target.set_checked(True, force=True)
+    await target.set_checked(True, force=True)
 
 
-def _set_checkbox_by_row_label(page: Page, label_text: str, should_check: bool) -> None:
-    row = _find_field_row(page, label_text)
+async def _set_checkbox_by_row_label(page: Page, label_text: str, should_check: bool) -> None:
+    row = await _find_field_row(page, label_text)
     checkbox = row.locator("input[type='checkbox']").first
-    if checkbox.count() == 0:
+    if await checkbox.count() == 0:
         raise NewYorkAutomationError(f"Checkbox not found for exact label '{label_text}'.")
 
-    row_info = _row_debug_descriptor(row)
+    row_info = await _row_debug_descriptor(row)
     _debug_action(label_text, str(should_check), f"row={row_info} -> checkbox")
-    checkbox.set_checked(should_check, force=True)
+    await checkbox.set_checked(should_check, force=True)
 
 
-def _find_field_row(page: Page, label_text: str) -> Locator:
-    label = _find_exact_label_node(page, label_text)
+async def _find_field_row(page: Page, label_text: str) -> Locator:
+    label = await _find_exact_label_node(page, label_text)
 
     # Strict nearest row wrappers; stop at first visible ancestor with controls.
     row_candidates = (
@@ -318,13 +326,13 @@ def _find_field_row(page: Page, label_text: str) -> Locator:
     )
 
     for candidate in row_candidates:
-        if candidate.count() > 0 and candidate.is_visible():
+        if await candidate.count() > 0 and await candidate.is_visible():
             return candidate
 
     raise NewYorkAutomationError(f"Could not find strict row container for exact label '{label_text}'.")
 
 
-def _find_exact_label_node(page: Page, label_text: str) -> Locator:
+async def _find_exact_label_node(page: Page, label_text: str) -> Locator:
     target = _normalize_label(label_text)
     xpath = (
         "xpath=//*[normalize-space(text())!='' and "
@@ -333,9 +341,10 @@ def _find_exact_label_node(page: Page, label_text: str) -> Locator:
     )
 
     matches = page.locator(xpath)
-    for i in range(matches.count()):
+    count = await matches.count()
+    for i in range(count):
         node = matches.nth(i)
-        if node.is_visible():
+        if await node.is_visible():
             return node
 
     # Fallback for labels with parent wrappers but exact normalized full text on wrapper.
@@ -345,55 +354,57 @@ def _find_exact_label_node(page: Page, label_text: str) -> Locator:
         f"'{target}' and not(*)]"
     )
     wrappers = page.locator(wrapper_xpath)
-    for i in range(wrappers.count()):
+    wrap_count = await wrappers.count()
+    for i in range(wrap_count):
         node = wrappers.nth(i)
-        if node.is_visible():
+        if await node.is_visible():
             return node
 
     raise NewYorkAutomationError(f"Could not find visible exact label node for '{label_text}'.")
 
 
-def _pick_radio_by_semantics(radios: Locator, yes_value: bool) -> Locator:
+async def _pick_radio_by_semantics(radios: Locator, yes_value: bool) -> Locator:
     desired = ("yes", "true", "1") if yes_value else ("no", "false", "0")
-    for i in range(radios.count()):
+    count = await radios.count()
+    for i in range(count):
         radio = radios.nth(i)
         tokens = " ".join([
-            _safe_attr(radio, "value"),
-            _safe_attr(radio, "id"),
-            _safe_attr(radio, "name"),
-            _safe_attr(radio, "aria-label"),
+            await _safe_attr(radio, "value"),
+            await _safe_attr(radio, "id"),
+            await _safe_attr(radio, "name"),
+            await _safe_attr(radio, "aria-label"),
         ]).lower()
         if any(token in tokens for token in desired):
             return radio
 
-    index = 0 if yes_value else min(1, radios.count() - 1)
+    index = 0 if yes_value else min(1, count - 1)
     return radios.nth(index)
 
 
-def _click_radio_label_for_input(row: Locator, radio: Locator) -> bool:
-    radio_id = _safe_attr(radio, "id")
+async def _click_radio_label_for_input(row: Locator, radio: Locator) -> bool:
+    radio_id = await _safe_attr(radio, "id")
     if radio_id:
         by_for = row.locator(f"label[for='{radio_id}']").first
-        if by_for.count() > 0 and by_for.is_visible():
-            by_for.click(force=True)
+        if await by_for.count() > 0 and await by_for.is_visible():
+            await by_for.click(force=True)
             return True
 
     sibling_label = radio.locator("xpath=following-sibling::label[1]").first
-    if sibling_label.count() > 0 and sibling_label.is_visible():
-        sibling_label.click(force=True)
+    if await sibling_label.count() > 0 and await sibling_label.is_visible():
+        await sibling_label.click(force=True)
         return True
 
     parent_label = radio.locator("xpath=ancestor::label[1]").first
-    if parent_label.count() > 0 and parent_label.is_visible():
-        parent_label.click(force=True)
+    if await parent_label.count() > 0 and await parent_label.is_visible():
+        await parent_label.click(force=True)
         return True
 
     return False
 
 
-def _row_debug_descriptor(row: Locator) -> str:
+async def _row_debug_descriptor(row: Locator) -> str:
     try:
-        html = row.evaluate("el => el.outerHTML.slice(0, 180)")
+        html = await row.evaluate("el => el.outerHTML.slice(0, 180)")
         return str(html).replace("\n", " ")
     except Exception:
         return "<row_html_unavailable>"
@@ -421,9 +432,11 @@ def _map_select_value(field_key: str, value: str) -> str:
     return raw
 
 
-def _guarded(errors: list[str], field_desc: str, action: Any) -> None:
+async def _guarded(errors: list[str], field_desc: str, action: Any) -> None:
     try:
-        action()
+        result = action()
+        if result is not None and hasattr(result, "__await__"):
+            await result
     except Exception as exc:
         message = f"Failed to set {field_desc}: {exc}"
         print(f"NY automation warning: {message}")
@@ -456,6 +469,6 @@ def _as_bool(value: Any) -> Optional[bool]:
     return None
 
 
-def _safe_attr(locator: Locator, attr_name: str) -> str:
-    value = locator.get_attribute(attr_name)
+async def _safe_attr(locator: Locator, attr_name: str) -> str:
+    value = await locator.get_attribute(attr_name)
     return "" if value is None else value
