@@ -169,6 +169,13 @@ def _upload_naupa_file(page: Page, file_path: Path) -> None:
     except PlaywrightTimeoutError:
         page.wait_for_timeout(1500)
 
+    print("CA reached upload page.")
+
+    if not file_path.exists():
+        print("CA warning: NAUPA file not found, skipping upload and leaving tab open for manual action.")
+        print("CA upload skipped due to missing file.")
+        return
+
     file_inputs = page.locator("input[type='file']")
     found_before_click = file_inputs.count() > 0
     print(f"Found CA upload input before clicking ADD DOCUMENT: {'yes' if found_before_click else 'no'}")
