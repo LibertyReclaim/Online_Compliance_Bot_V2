@@ -151,21 +151,13 @@ async def _fill_holder_info_page(page: Page, record: Dict[str, Any], errors: lis
             mapped = "United States of America"
         if not mapped:
             continue
-        await _guarded(
-            errors,
-            f"dropdown '{field.label}'",
-            lambda: _select_dropdown_by_row_label(page, field.label, mapped),
-        )
+        await _guarded(errors, f"dropdown '{field.label}'", lambda: _select_dropdown_by_row_label(page, field.label, mapped))
 
     for field in _RADIO_FIELDS:
         bool_value = _as_bool(record.get(field.key))
         if bool_value is None:
             continue
-        await _guarded(
-            errors,
-            f"radio '{field.label}'",
-            lambda: _set_yes_no_radio_by_row_label(page, field.label, bool_value),
-        )
+        await _guarded(errors, f"radio '{field.label}'", lambda: _set_yes_no_radio_by_row_label(page, field.label, bool_value))
 
     foreign_address = _as_bool(record.get("foreign_address"))
     if foreign_address:
@@ -262,11 +254,9 @@ async def _click_next(page: Page) -> None:
 
 async def _fill_text_by_row_label(page: Page, label_text: str, value: str) -> None:
     row = await _find_field_row(page, label_text)
-    input_locator = row.locator(
-        "input[type='text'], input[type='tel'], input[type='email'], input:not([type]), textarea"
-    ).first
+    input_locator = row.locator("input[type='text'], input[type='tel'], input[type='email'], input:not([type]), textarea").first
     if await input_locator.count() == 0:
-        raise NewYorkAutomationError(f"Text input not found for exact label '{label_text}'.")
+        raise NewYorkAutomationError(f"Text input not found for label '{label_text}'.")
 
     row_info = await _row_debug_descriptor(row)
     _debug_action(label_text, value, f"row={row_info} -> text_input")
@@ -278,7 +268,7 @@ async def _select_dropdown_by_row_label(page: Page, label_text: str, value: str)
     row = await _find_field_row(page, label_text)
     select_locator = row.locator("select").first
     if await select_locator.count() == 0:
-        raise NewYorkAutomationError(f"Dropdown/select not found for exact label '{label_text}'.")
+        raise NewYorkAutomationError(f"Dropdown/select not found for label '{label_text}'.")
 
     row_info = await _row_debug_descriptor(row)
     _debug_action(label_text, value, f"row={row_info} -> select")
@@ -293,7 +283,7 @@ async def _set_yes_no_radio_by_row_label(page: Page, label_text: str, yes_value:
     row = await _find_field_row(page, label_text)
     radios = row.locator("input[type='radio']")
     if await radios.count() == 0:
-        raise NewYorkAutomationError(f"Radio inputs not found for exact label '{label_text}'.")
+        raise NewYorkAutomationError(f"Radio inputs not found for label '{label_text}'.")
 
     target = await _pick_radio_by_semantics(radios, yes_value)
     row_info = await _row_debug_descriptor(row)
@@ -308,7 +298,7 @@ async def _set_checkbox_by_row_label(page: Page, label_text: str, should_check: 
     row = await _find_field_row(page, label_text)
     checkbox = row.locator("input[type='checkbox']").first
     if await checkbox.count() == 0:
-        raise NewYorkAutomationError(f"Checkbox not found for exact label '{label_text}'.")
+        raise NewYorkAutomationError(f"Checkbox not found for label '{label_text}'.")
 
     row_info = await _row_debug_descriptor(row)
     _debug_action(label_text, str(should_check), f"row={row_info} -> checkbox")
@@ -316,51 +306,54 @@ async def _set_checkbox_by_row_label(page: Page, label_text: str, should_check: 
 
 
 async def _find_field_row(page: Page, label_text: str) -> Locator:
-    label = await _find_exact_label_node(page, label_text)
+    label_anchor = await _find_label_anchor(page, label_text)
 
-    # Strict nearest row wrappers; stop at first visible ancestor with controls.
     row_candidates = (
-        label.locator("xpath=ancestor::*[contains(@class,'row') and (.//input or .//select or .//textarea)][1]").first,
-        label.locator("xpath=ancestor::*[contains(@class,'form-group') and (.//input or .//select or .//textarea)][1]").first,
-        label.locator("xpath=ancestor::div[.//input or .//select or .//textarea][1]").first,
+        label_anchor.locator("xpath=ancestor::*[contains(@class,'row') and (.//input or .//select or .//textarea)][1]").first,
+        label_anchor.locator("xpath=ancestor::*[contains(@class,'form-group') and (.//input or .//select or .//textarea)][1]").first,
+        label_anchor.locator("xpath=ancestor::div[.//input or .//select or .//textarea][1]").first,
+        label_anchor.locator("xpath=ancestor::*[.//input or .//select or .//textarea][1]").first,
     )
 
     for candidate in row_candidates:
         if await candidate.count() > 0 and await candidate.is_visible():
             return candidate
 
-    raise NewYorkAutomationError(f"Could not find strict row container for exact label '{label_text}'.")
+    raise NewYorkAutomationError(f"Could not find row/container for label '{label_text}'.")
 
 
-async def _find_exact_label_node(page: Page, label_text: str) -> Locator:
+async def _find_label_anchor(page: Page, label_text: str) -> Locator:
     target = _normalize_label(label_text)
-    xpath = (
-        "xpath=//*[normalize-space(text())!='' and "
-        "translate(normalize-space(text()), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ*:', 'abcdefghijklmnopqrstuvwxyz  ')="
-        f"'{target}']"
-    )
+    token = target.split()[0] if target else ""
 
-    matches = page.locator(xpath)
-    count = await matches.count()
-    for i in range(count):
-        node = matches.nth(i)
-        if await node.is_visible():
-            return node
-
-    # Fallback for labels with parent wrappers but exact normalized full text on wrapper.
-    wrapper_xpath = (
+    # Prefer full normalized contains match.
+    full_xpath = (
         "xpath=//*[normalize-space(string(.))!='' and "
-        "translate(normalize-space(string(.)), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ*:', 'abcdefghijklmnopqrstuvwxyz  ')="
-        f"'{target}' and not(*)]"
+        "contains(translate(normalize-space(string(.)), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ*:', 'abcdefghijklmnopqrstuvwxyz  '), "
+        f"'{target}')]"
     )
-    wrappers = page.locator(wrapper_xpath)
-    wrap_count = await wrappers.count()
-    for i in range(wrap_count):
-        node = wrappers.nth(i)
+    full_matches = page.locator(full_xpath)
+    full_count = await full_matches.count()
+    for i in range(full_count):
+        node = full_matches.nth(i)
         if await node.is_visible():
             return node
 
-    raise NewYorkAutomationError(f"Could not find visible exact label node for '{label_text}'.")
+    # Fallback to first-token contains matching.
+    if token:
+        token_xpath = (
+            "xpath=//*[normalize-space(string(.))!='' and "
+            "contains(translate(normalize-space(string(.)), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ*:', 'abcdefghijklmnopqrstuvwxyz  '), "
+            f"'{token}')]"
+        )
+        token_matches = page.locator(token_xpath)
+        token_count = await token_matches.count()
+        for i in range(token_count):
+            node = token_matches.nth(i)
+            if await node.is_visible():
+                return node
+
+    raise NewYorkAutomationError(f"Could not find visible label anchor for '{label_text}'.")
 
 
 async def _pick_radio_by_semantics(radios: Locator, yes_value: bool) -> Locator:

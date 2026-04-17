@@ -61,12 +61,14 @@ def run(
     record = _merge_records(holder_row, payment_row)
     naupa_path = Path(naupa_file_path).expanduser().resolve()
 
-    if not naupa_path.exists():
-        raise FileNotFoundError(f"NAUPA file not found: {naupa_path}")
+    print(f"Starting CA navigation to {CA_HOLDER_INFO_URL}")
+    print(f"CA NAUPA path: {naupa_path}")
+    print(f"CA NAUPA exists: {'yes' if naupa_path.exists() else 'no'}")
 
     page.goto(CA_HOLDER_INFO_URL, wait_until="domcontentloaded")
     page.wait_for_timeout(wait_after_navigation_ms)
 
+    print("CA form filling begins")
     errors: list[str] = []
     _fill_ca_holder_info_page(page, record, errors)
 
@@ -75,7 +77,9 @@ def run(
 
     _click_next(page)
     _upload_naupa_file(page, naupa_path)
-    _click_next(page)
+
+    if naupa_path.exists():
+        _click_next(page)
 
 
 run_california = run
@@ -169,11 +173,12 @@ def _upload_naupa_file(page: Page, file_path: Path) -> None:
     except PlaywrightTimeoutError:
         page.wait_for_timeout(1500)
 
-    print("CA reached upload page.")
+    print("CA reached upload page")
+    print(f"CA NAUPA exists: {'yes' if file_path.exists() else 'no'}")
 
     if not file_path.exists():
         print("CA warning: NAUPA file not found, skipping upload and leaving tab open for manual action.")
-        print("CA upload skipped due to missing file.")
+        print("CA upload skipped due to missing file")
         return
 
     file_inputs = page.locator("input[type='file']")
