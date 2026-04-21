@@ -127,9 +127,11 @@ async def _fill_ca_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     if is_remit_report and funds:
         await _guarded(errors, "dropdown 'Funds Remitted Via'", lambda: _select_dropdown_by_label(page, "Funds Remitted Via", funds))
 
-    negative = _as_bool(record.get("negative_report"))
-    if negative is not None:
-        await _guarded(errors, "radio 'This is a Negative Report'", lambda: _set_yes_no_radio_by_label(page, "This is a Negative Report", negative))
+    negative_raw = record.get("negative_report")
+    negative = _resolve_negative_report(negative_raw, record.get("amount_to_remit"))
+    print(f"CA debug -> negative_report raw='{_as_string(negative_raw)}' resolved={negative}")
+    await _guarded(errors, "radio 'This is a Negative Report'", lambda: _set_yes_no_radio_by_label(page, "This is a Negative Report", negative))
+    print(f"CA debug -> selected Negative Report = {'Yes' if negative else 'No'}")
 
     safe_box = _as_bool(record.get("safe_deposit_box"))
     if safe_box is not None:
@@ -137,16 +139,20 @@ async def _fill_ca_holder_info_page(page: Page, record: Dict[str, Any], errors: 
 
     total_cash = _as_string(record.get("amount_to_remit"))
     total_shares = _as_string(record.get("total_shares"))
-    if negative is False and not total_cash:
+    if not negative and not total_cash:
         errors.append("amount_to_remit is required when negative_report is No.")
 
     cash_label = "Total Cash Remitted" if is_remit_report else "Total Cash Reported"
     shares_label = "Total Shares Remitted" if is_remit_report else "Total Shares Reported"
 
-    if total_cash:
-        await _guarded(errors, f"text '{cash_label}'", lambda: _fill_text_by_label(page, cash_label, total_cash))
-    if total_shares:
-        await _guarded(errors, f"text '{shares_label}'", lambda: _fill_text_by_label(page, shares_label, total_shares))
+    if negative:
+        print(f"CA debug -> skipping {cash_label} because negative report is Yes")
+        print(f"CA debug -> skipping {shares_label} because negative report is Yes")
+    else:
+        if total_cash:
+            await _guarded(errors, f"text '{cash_label}'", lambda: _fill_text_if_enabled_by_label(page, cash_label, total_cash))
+        if total_shares:
+            await _guarded(errors, f"text '{shares_label}'", lambda: _fill_text_if_enabled_by_label(page, shares_label, total_shares))
 
 
 async def _upload_naupa_file(page: Page, file_path: Path) -> None:
@@ -224,6 +230,38 @@ async def _select_dropdown_by_label(page: Page, label_text: str, value: str) -> 
     control, matched, row_count, strategy = await _resolve_nearest_control(page, label_text, _SELECT_SELECTOR, "select")
     await control.select_option(label=value)
     _log_success("CA", label_text, matched, row_count, strategy)
+
+
+async def _fill_text_if_enabled_by_label(page: Page, label_text: str, value: str) -> None:
+    control, matched, row_count, strategy = await _resolve_nearest_control(page, label_text, _TEXT_SELECTOR, "text")
+    enabled = await control.is_enabled()
+    print(f"CA debug -> {label_text} enabled: {'yes' if enabled else 'no'}")
+    if not enabled:
+        print(f"CA debug -> skipping {label_text} because field is disabled")
+        return
+    await control.fill(value)
+    _log_success("CA", label_text, matched, row_count, strategy)
+
+
+def _resolve_negative_report(raw_value: Any, amount_to_remit: Any) -> bool:
+    explicit = _as_bool(raw_value)
+    if explicit is not None:
+        return explicit
+
+    amount = _as_float(amount_to_remit)
+    if amount is None:
+        return True
+    return amount <= 0
+
+
+def _as_float(value: Any) -> Optional[float]:
+    text = _as_string(value).replace(',', '')
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
 
 
 async def _set_yes_no_radio_by_label(page: Page, label_text: str, yes_value: bool) -> None:
