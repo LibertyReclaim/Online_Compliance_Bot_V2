@@ -142,7 +142,7 @@ async def _fill_holder_info_page(page: Page, record: Dict[str, Any], errors: lis
         if not value:
             continue
 
-        await _guarded(errors, f"text '{field.label}'", lambda: _fill_text_by_row_label(page, field.label, value))
+        await _guarded(errors, f"text '{field.label}'", lambda: _fill_text_by_label(page, field.label, value))
 
     for field in _SELECT_FIELDS:
         value = _as_string(record.get(field.key))
@@ -151,20 +151,20 @@ async def _fill_holder_info_page(page: Page, record: Dict[str, Any], errors: lis
             mapped = "United States of America"
         if not mapped:
             continue
-        await _guarded(errors, f"dropdown '{field.label}'", lambda: _select_dropdown_by_row_label(page, field.label, mapped))
+        await _guarded(errors, f"dropdown '{field.label}'", lambda: _select_dropdown_by_label(page, field.label, mapped))
 
     for field in _RADIO_FIELDS:
         bool_value = _as_bool(record.get(field.key))
         if bool_value is None:
             continue
-        await _guarded(errors, f"radio '{field.label}'", lambda: _set_yes_no_radio_by_row_label(page, field.label, bool_value))
+        await _guarded(errors, f"radio '{field.label}'", lambda: _set_yes_no_radio_by_label(page, field.label, bool_value))
 
     foreign_address = _as_bool(record.get("foreign_address"))
     if foreign_address:
         await _guarded(
             errors,
             f"checkbox '{_FOREIGN_ADDRESS_LABEL}'",
-            lambda: _set_checkbox_by_row_label(page, _FOREIGN_ADDRESS_LABEL, should_check=True),
+            lambda: _set_checkbox_by_label(page, _FOREIGN_ADDRESS_LABEL, should_check=True),
         )
 
 
@@ -252,108 +252,199 @@ async def _click_next(page: Page) -> None:
     raise NewYorkAutomationError("Could not find a clickable 'Next' control on NY page.")
 
 
-async def _fill_text_by_row_label(page: Page, label_text: str, value: str) -> None:
-    row = await _find_field_row(page, label_text)
-    input_locator = row.locator("input[type='text'], input[type='tel'], input[type='email'], input:not([type]), textarea").first
-    if await input_locator.count() == 0:
-        raise NewYorkAutomationError(f"Text input not found for label '{label_text}'.")
-
-    row_info = await _row_debug_descriptor(row)
-    _debug_action(label_text, value, f"row={row_info} -> text_input")
-    await input_locator.scroll_into_view_if_needed()
-    await input_locator.fill(value)
+_TEXT_CONTROL_SELECTOR = "input[type='text'], input:not([type='hidden']), textarea"
+_SELECT_CONTROL_SELECTOR = "select"
+_RADIO_CONTROL_SELECTOR = "input[type='radio']"
+_CHECKBOX_CONTROL_SELECTOR = "input[type='checkbox']"
 
 
-async def _select_dropdown_by_row_label(page: Page, label_text: str, value: str) -> None:
-    row = await _find_field_row(page, label_text)
-    select_locator = row.locator("select").first
-    if await select_locator.count() == 0:
-        raise NewYorkAutomationError(f"Dropdown/select not found for label '{label_text}'.")
+async def _fill_text_by_label(page: Page, label_text: str, value: str) -> None:
+    locator, strategy = await _resolve_control(page, label_text, _TEXT_CONTROL_SELECTOR, "text")
+    await locator.scroll_into_view_if_needed()
+    await locator.fill(value)
+    _log_field_success(label_text, strategy)
 
-    row_info = await _row_debug_descriptor(row)
-    _debug_action(label_text, value, f"row={row_info} -> select")
-    await select_locator.scroll_into_view_if_needed()
+
+async def _select_dropdown_by_label(page: Page, label_text: str, value: str) -> None:
+    locator, strategy = await _resolve_control(page, label_text, _SELECT_CONTROL_SELECTOR, "select")
+    await locator.scroll_into_view_if_needed()
     try:
-        await select_locator.select_option(label=value)
+        await locator.select_option(label=value)
     except Exception as exc:
         raise NewYorkAutomationError(f"Unable to select option label '{value}' for dropdown '{label_text}'.") from exc
+    _log_field_success(label_text, strategy)
 
 
-async def _set_yes_no_radio_by_row_label(page: Page, label_text: str, yes_value: bool) -> None:
-    row = await _find_field_row(page, label_text)
-    radios = row.locator("input[type='radio']")
-    if await radios.count() == 0:
-        raise NewYorkAutomationError(f"Radio inputs not found for label '{label_text}'.")
-
+async def _set_yes_no_radio_by_label(page: Page, label_text: str, yes_value: bool) -> None:
+    radios, strategy = await _resolve_control_collection(page, label_text, _RADIO_CONTROL_SELECTOR, "radio")
     target = await _pick_radio_by_semantics(radios, yes_value)
-    row_info = await _row_debug_descriptor(row)
-    _debug_action(label_text, str(yes_value), f"row={row_info} -> radio")
-
+    row = target.locator("xpath=ancestor::*[self::div or self::tr or self::td][1]")
     if await _click_radio_label_for_input(row, target):
+        _log_field_success(label_text, strategy)
         return
     await target.set_checked(True, force=True)
+    _log_field_success(label_text, strategy)
 
 
-async def _set_checkbox_by_row_label(page: Page, label_text: str, should_check: bool) -> None:
-    row = await _find_field_row(page, label_text)
-    checkbox = row.locator("input[type='checkbox']").first
-    if await checkbox.count() == 0:
-        raise NewYorkAutomationError(f"Checkbox not found for label '{label_text}'.")
-
-    row_info = await _row_debug_descriptor(row)
-    _debug_action(label_text, str(should_check), f"row={row_info} -> checkbox")
-    await checkbox.set_checked(should_check, force=True)
+async def _set_checkbox_by_label(page: Page, label_text: str, should_check: bool) -> None:
+    locator, strategy = await _resolve_control(page, label_text, _CHECKBOX_CONTROL_SELECTOR, "checkbox")
+    await locator.set_checked(should_check, force=True)
+    _log_field_success(label_text, strategy)
 
 
-async def _find_field_row(page: Page, label_text: str) -> Locator:
-    label_anchor = await _find_label_anchor(page, label_text)
-
-    row_candidates = (
-        label_anchor.locator("xpath=ancestor::*[contains(@class,'row') and (.//input or .//select or .//textarea)][1]").first,
-        label_anchor.locator("xpath=ancestor::*[contains(@class,'form-group') and (.//input or .//select or .//textarea)][1]").first,
-        label_anchor.locator("xpath=ancestor::div[.//input or .//select or .//textarea][1]").first,
-        label_anchor.locator("xpath=ancestor::*[.//input or .//select or .//textarea][1]").first,
-    )
-
-    for candidate in row_candidates:
-        if await candidate.count() > 0 and await candidate.is_visible():
-            return candidate
-
-    raise NewYorkAutomationError(f"Could not find row/container for label '{label_text}'.")
+async def _resolve_control(page: Page, label_text: str, control_selector: str, field_kind: str) -> tuple[Locator, str]:
+    controls, strategy = await _resolve_control_collection(page, label_text, control_selector, field_kind)
+    return controls.first, strategy
 
 
-async def _find_label_anchor(page: Page, label_text: str) -> Locator:
-    target = _normalize_label(label_text)
-    token = target.split()[0] if target else ""
+async def _resolve_control_collection(
+    page: Page,
+    label_text: str,
+    control_selector: str,
+    field_kind: str,
+) -> tuple[Locator, str]:
+    normalized = _normalize_label(label_text)
 
-    # Prefer full normalized contains match.
-    full_xpath = (
-        "xpath=//*[normalize-space(string(.))!='' and "
-        "contains(translate(normalize-space(string(.)), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ*:', 'abcdefghijklmnopqrstuvwxyz  '), "
-        f"'{target}')]"
-    )
-    full_matches = page.locator(full_xpath)
-    full_count = await full_matches.count()
-    for i in range(full_count):
-        node = full_matches.nth(i)
-        if await node.is_visible():
-            return node
+    row_controls = await _try_row_strategy(page, label_text, normalized, control_selector)
+    if row_controls is not None:
+        return row_controls, "xpath row"
 
-    # Fallback to first-token contains matching.
-    if token:
-        token_xpath = (
-            "xpath=//*[normalize-space(string(.))!='' and "
-            "contains(translate(normalize-space(string(.)), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ*:', 'abcdefghijklmnopqrstuvwxyz  '), "
-            f"'{token}')]"
+    by_label_controls = await _try_get_by_label_strategy(page, label_text, normalized, control_selector)
+    if by_label_controls is not None:
+        return by_label_controls, "get_by_label fallback"
+
+    xpath_controls = await _try_following_xpath_strategy(page, label_text, normalized, control_selector)
+    if xpath_controls is not None:
+        return xpath_controls, "xpath fallback"
+
+    reason = f"Unable to locate {field_kind} control for label '{label_text}' with all strategies."
+    _log_field_failure(label_text, normalized, reason)
+    raise NewYorkAutomationError(reason)
+
+
+async def _try_row_strategy(page: Page, label_text: str, normalized: str, control_selector: str) -> Optional[Locator]:
+    anchors = await _find_label_anchors(page, normalized)
+    if not anchors:
+        _log_field_failure(label_text, normalized, "row strategy: no matching label anchor found")
+        return None
+
+    for anchor in anchors:
+        row_candidates = (
+            anchor.locator("xpath=ancestor::*[contains(@class,'row')][1]").first,
+            anchor.locator("xpath=ancestor::*[contains(@class,'form-group')][1]").first,
+            anchor.locator("xpath=ancestor::tr[1]").first,
+            anchor.locator("xpath=ancestor::td[1]").first,
+            anchor.locator("xpath=ancestor::div[1]").first,
         )
-        token_matches = page.locator(token_xpath)
-        token_count = await token_matches.count()
-        for i in range(token_count):
-            node = token_matches.nth(i)
-            if await node.is_visible():
-                return node
 
-    raise NewYorkAutomationError(f"Could not find visible label anchor for '{label_text}'.")
+        for row in row_candidates:
+            if await row.count() == 0:
+                continue
+            controls = row.locator(control_selector)
+            if await controls.count() > 0:
+                return controls
+
+    _log_field_failure(label_text, normalized, "row strategy: anchor found but no control in nearby row/container")
+    return None
+
+
+async def _try_get_by_label_strategy(
+    page: Page,
+    label_text: str,
+    normalized: str,
+    control_selector: str,
+) -> Optional[Locator]:
+    candidates = (label_text, normalized)
+    for candidate in candidates:
+        label_match = page.get_by_label(candidate, exact=False)
+        if await label_match.count() <= 0:
+            continue
+        control_match = label_match.locator("xpath=self::input|self::textarea|self::select").first
+        if await control_match.count() > 0:
+            return control_match
+        descendants = label_match.locator(control_selector)
+        if await descendants.count() > 0:
+            return descendants
+
+    _log_field_failure(label_text, normalized, "get_by_label fallback: no matching controls")
+    return None
+
+
+async def _try_following_xpath_strategy(
+    page: Page,
+    label_text: str,
+    normalized: str,
+    control_selector: str,
+) -> Optional[Locator]:
+    escaped = _xpath_literal(normalized)
+    anchor_xpath = (
+        "//*[contains(translate(normalize-space(string(.)), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ*:',"
+        "'abcdefghijklmnopqrstuvwxyz  '), "
+        f"{escaped})]"
+    )
+
+    controls_xpath = _selector_to_xpath_for_following(control_selector)
+    if not controls_xpath:
+        return None
+
+    locator = page.locator(f"xpath=({anchor_xpath})[1]/following::{controls_xpath}[1]")
+    if await locator.count() > 0:
+        return locator
+
+    _log_field_failure(label_text, normalized, "xpath fallback: no following control found")
+    return None
+
+
+async def _find_label_anchors(page: Page, normalized_label: str) -> list[Locator]:
+    escaped = _xpath_literal(normalized_label)
+    xpath = (
+        "xpath=//*[contains(translate(normalize-space(string(.)), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ*:',"
+        "'abcdefghijklmnopqrstuvwxyz  '), "
+        f"{escaped})]"
+    )
+    candidates = page.locator(xpath)
+    count = await candidates.count()
+    visible: list[Locator] = []
+    for index in range(count):
+        node = candidates.nth(index)
+        if await node.is_visible():
+            visible.append(node)
+    return visible
+
+
+def _selector_to_xpath_for_following(control_selector: str) -> str:
+    if control_selector == _TEXT_CONTROL_SELECTOR:
+        return "input[not(@type='hidden')] | textarea"
+    if control_selector == _SELECT_CONTROL_SELECTOR:
+        return "select"
+    if control_selector == _RADIO_CONTROL_SELECTOR:
+        return "input[@type='radio']"
+    if control_selector == _CHECKBOX_CONTROL_SELECTOR:
+        return "input[@type='checkbox']"
+    return ""
+
+
+def _xpath_literal(value: str) -> str:
+    if "'" not in value:
+        return f"'{value}'"
+    if '"' not in value:
+        return f'"{value}"'
+    pieces = value.split("'")
+    joined = ", \"'\", ".join(f"'{piece}'" for piece in pieces)
+    return f"concat({joined})"
+
+
+def _log_field_success(label_text: str, strategy: str) -> None:
+    normalized = _normalize_label(label_text)
+    print(
+        f"NY debug -> field='{label_text}' label='{label_text}' normalized='{normalized}' strategy='{strategy}'"
+    )
+
+
+def _log_field_failure(label_text: str, normalized: str, reason: str) -> None:
+    print(
+        f"NY debug -> field='{label_text}' label='{label_text}' normalized='{normalized}' failure='{reason}'"
+    )
 
 
 async def _pick_radio_by_semantics(radios: Locator, yes_value: bool) -> Locator:
@@ -393,14 +484,6 @@ async def _click_radio_label_for_input(row: Locator, radio: Locator) -> bool:
         return True
 
     return False
-
-
-async def _row_debug_descriptor(row: Locator) -> str:
-    try:
-        html = await row.evaluate("el => el.outerHTML.slice(0, 180)")
-        return str(html).replace("\n", " ")
-    except Exception:
-        return "<row_html_unavailable>"
 
 
 def _debug_action(field_name: str, value: str, selector_info: str) -> None:

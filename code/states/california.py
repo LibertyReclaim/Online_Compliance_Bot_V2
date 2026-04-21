@@ -86,20 +86,20 @@ async def _fill_ca_holder_info_page(page: Page, record: Dict[str, Any], errors: 
         if not value:
             continue
         _debug_field(field.label, value)
-        await _guarded(errors, f"text '{field.label}'", lambda: _fill_text_by_row_label(page, field.label, value))
+        await _guarded(errors, f"text '{field.label}'", lambda: _fill_text_by_label(page, field.label, value))
 
     email_value = record.get("email")
     print("Filling Email fields with:", email_value)
     if email_value:
         for field in _EMAIL_FIELDS:
-            await _guarded(errors, f"text '{field.label}'", lambda: _fill_text_by_row_label(page, field.label, email_value))
+            await _guarded(errors, f"text '{field.label}'", lambda: _fill_text_by_label(page, field.label, email_value))
 
     for field in _DROPDOWN_FIELDS:
         value = _as_string(record.get(field.key))
         if not value:
             continue
         _debug_field(field.label, value)
-        await _guarded(errors, f"dropdown '{field.label}'", lambda: _select_dropdown_by_row_label(page, field.label, value))
+        await _guarded(errors, f"dropdown '{field.label}'", lambda: _select_dropdown_by_label(page, field.label, value))
 
     submission_type = _as_string(record.get("ca_submission_type"))
     is_remit_report = submission_type.lower() == "remit report"
@@ -110,14 +110,14 @@ async def _fill_ca_holder_info_page(page: Page, record: Dict[str, Any], errors: 
 
         if remit_report_id:
             _debug_field("Remit Report ID", remit_report_id)
-            await _guarded(errors, "text 'Remit Report ID'", lambda: _fill_text_by_row_label(page, "Remit Report ID", remit_report_id))
+            await _guarded(errors, "text 'Remit Report ID'", lambda: _fill_text_by_label(page, "Remit Report ID", remit_report_id))
 
         if funds_remitted_via:
             _debug_field("Funds Remitted Via", funds_remitted_via)
             await _guarded(
                 errors,
                 "dropdown 'Funds Remitted Via'",
-                lambda: _select_dropdown_by_row_label(page, "Funds Remitted Via", funds_remitted_via),
+                lambda: _select_dropdown_by_label(page, "Funds Remitted Via", funds_remitted_via),
             )
 
     negative_report = _as_bool(record.get("ca_negative_report"))
@@ -126,7 +126,7 @@ async def _fill_ca_holder_info_page(page: Page, record: Dict[str, Any], errors: 
         await _guarded(
             errors,
             "radio 'This is a Negative Report'",
-            lambda: _set_yes_no_radio_by_row_label(page, "This is a Negative Report", negative_report),
+            lambda: _set_yes_no_radio_by_label(page, "This is a Negative Report", negative_report),
         )
 
     safe_deposit = _as_bool(record.get("ca_safe_deposit_box"))
@@ -135,7 +135,7 @@ async def _fill_ca_holder_info_page(page: Page, record: Dict[str, Any], errors: 
         await _guarded(
             errors,
             "radio 'Includes Safe Deposit Box'",
-            lambda: _set_yes_no_radio_by_row_label(page, "Includes Safe Deposit Box", safe_deposit),
+            lambda: _set_yes_no_radio_by_label(page, "Includes Safe Deposit Box", safe_deposit),
         )
 
     total_cash = _as_string(record.get("ca_total_cash"))
@@ -149,11 +149,11 @@ async def _fill_ca_holder_info_page(page: Page, record: Dict[str, Any], errors: 
 
     if total_cash:
         _debug_field(cash_label, total_cash)
-        await _guarded(errors, f"text '{cash_label}'", lambda: _fill_text_by_row_label(page, cash_label, total_cash))
+        await _guarded(errors, f"text '{cash_label}'", lambda: _fill_text_by_label(page, cash_label, total_cash))
 
     if total_shares:
         _debug_field(shares_label, total_shares)
-        await _guarded(errors, f"text '{shares_label}'", lambda: _fill_text_by_row_label(page, shares_label, total_shares))
+        await _guarded(errors, f"text '{shares_label}'", lambda: _fill_text_by_label(page, shares_label, total_shares))
 
 
 async def _upload_naupa_file(page: Page, file_path: Path) -> None:
@@ -240,90 +240,197 @@ async def _click_next(page: Page) -> None:
     raise CaliforniaAutomationError("Could not find a clickable 'Next' control on CA page.")
 
 
-async def _fill_text_by_row_label(page: Page, label_text: str, value: str) -> None:
-    row = await _find_field_row(page, label_text)
-    input_locator = row.locator(
-        "input[type='text'], input[type='tel'], input[type='email'], input[type='number'], input:not([type]), textarea"
-    ).first
-    if await input_locator.count() == 0:
-        raise CaliforniaAutomationError(f"Text input not found for label '{label_text}'.")
-
-    await input_locator.scroll_into_view_if_needed()
-    await input_locator.fill(value)
+_TEXT_CONTROL_SELECTOR = "input[type='text'], input:not([type='hidden']), textarea"
+_SELECT_CONTROL_SELECTOR = "select"
+_RADIO_CONTROL_SELECTOR = "input[type='radio']"
+_CHECKBOX_CONTROL_SELECTOR = "input[type='checkbox']"
 
 
-async def _select_dropdown_by_row_label(page: Page, label_text: str, value: str) -> None:
-    row = await _find_field_row(page, label_text)
-    select_locator = row.locator("select").first
-    if await select_locator.count() == 0:
-        raise CaliforniaAutomationError(f"Dropdown/select not found for label '{label_text}'.")
+async def _fill_text_by_label(page: Page, label_text: str, value: str) -> None:
+    locator, strategy = await _resolve_control(page, label_text, _TEXT_CONTROL_SELECTOR, "text")
+    await locator.scroll_into_view_if_needed()
+    await locator.fill(value)
+    _log_field_success(label_text, strategy)
 
-    await select_locator.scroll_into_view_if_needed()
+
+async def _select_dropdown_by_label(page: Page, label_text: str, value: str) -> None:
+    locator, strategy = await _resolve_control(page, label_text, _SELECT_CONTROL_SELECTOR, "select")
+    await locator.scroll_into_view_if_needed()
     try:
-        await select_locator.select_option(label=value)
+        await locator.select_option(label=value)
     except Exception as exc:
         raise CaliforniaAutomationError(f"Unable to select option label '{value}' for dropdown '{label_text}'.") from exc
+    _log_field_success(label_text, strategy)
 
 
-async def _set_yes_no_radio_by_row_label(page: Page, label_text: str, yes_value: bool) -> None:
-    row = await _find_field_row(page, label_text)
-    radios = row.locator("input[type='radio']")
-    if await radios.count() == 0:
-        raise CaliforniaAutomationError(f"Radio inputs not found for label '{label_text}'.")
-
+async def _set_yes_no_radio_by_label(page: Page, label_text: str, yes_value: bool) -> None:
+    radios, strategy = await _resolve_control_collection(page, label_text, _RADIO_CONTROL_SELECTOR, "radio")
     target = await _pick_radio_by_semantics(radios, yes_value)
+    row = target.locator("xpath=ancestor::*[self::div or self::tr or self::td][1]")
     if await _click_radio_label_for_input(row, target):
+        _log_field_success(label_text, strategy)
         return
     await target.set_checked(True, force=True)
+    _log_field_success(label_text, strategy)
 
 
-async def _find_field_row(page: Page, label_text: str) -> Locator:
-    label = await _find_label_anchor(page, label_text)
-
-    row_candidates = (
-        label.locator("xpath=ancestor::*[contains(@class,'row') and (.//input or .//select or .//textarea)][1]").first,
-        label.locator("xpath=ancestor::*[contains(@class,'form-group') and (.//input or .//select or .//textarea)][1]").first,
-        label.locator("xpath=ancestor::div[.//input or .//select or .//textarea][1]").first,
-        label.locator("xpath=ancestor::*[.//input or .//select or .//textarea][1]").first,
-    )
-
-    for candidate in row_candidates:
-        if await candidate.count() > 0 and await candidate.is_visible():
-            return candidate
-
-    raise CaliforniaAutomationError(f"Could not find row/container for label '{label_text}'.")
+async def _resolve_control(page: Page, label_text: str, control_selector: str, field_kind: str) -> tuple[Locator, str]:
+    controls, strategy = await _resolve_control_collection(page, label_text, control_selector, field_kind)
+    return controls.first, strategy
 
 
-async def _find_label_anchor(page: Page, label_text: str) -> Locator:
-    target = _normalize_label(label_text)
-    token = target.split()[0] if target else ""
+async def _resolve_control_collection(
+    page: Page,
+    label_text: str,
+    control_selector: str,
+    field_kind: str,
+) -> tuple[Locator, str]:
+    normalized = _normalize_label(label_text)
 
-    full_xpath = (
-        "xpath=//*[normalize-space(string(.))!='' and "
-        "contains(translate(normalize-space(string(.)), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ*:', 'abcdefghijklmnopqrstuvwxyz  '), "
-        f"'{target}')]"
-    )
-    full_matches = page.locator(full_xpath)
-    full_count = await full_matches.count()
-    for i in range(full_count):
-        node = full_matches.nth(i)
-        if await node.is_visible():
-            return node
+    row_controls = await _try_row_strategy(page, label_text, normalized, control_selector)
+    if row_controls is not None:
+        return row_controls, "xpath row"
 
-    if token:
-        token_xpath = (
-            "xpath=//*[normalize-space(string(.))!='' and "
-            "contains(translate(normalize-space(string(.)), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ*:', 'abcdefghijklmnopqrstuvwxyz  '), "
-            f"'{token}')]"
+    by_label_controls = await _try_get_by_label_strategy(page, label_text, normalized, control_selector)
+    if by_label_controls is not None:
+        return by_label_controls, "get_by_label fallback"
+
+    xpath_controls = await _try_following_xpath_strategy(page, label_text, normalized, control_selector)
+    if xpath_controls is not None:
+        return xpath_controls, "xpath fallback"
+
+    reason = f"Unable to locate {field_kind} control for label '{label_text}' with all strategies."
+    _log_field_failure(label_text, normalized, reason)
+    raise CaliforniaAutomationError(reason)
+
+
+async def _try_row_strategy(page: Page, label_text: str, normalized: str, control_selector: str) -> Optional[Locator]:
+    anchors = await _find_label_anchors(page, normalized)
+    if not anchors:
+        _log_field_failure(label_text, normalized, "row strategy: no matching label anchor found")
+        return None
+
+    for anchor in anchors:
+        row_candidates = (
+            anchor.locator("xpath=ancestor::*[contains(@class,'row')][1]").first,
+            anchor.locator("xpath=ancestor::*[contains(@class,'form-group')][1]").first,
+            anchor.locator("xpath=ancestor::tr[1]").first,
+            anchor.locator("xpath=ancestor::td[1]").first,
+            anchor.locator("xpath=ancestor::div[1]").first,
         )
-        token_matches = page.locator(token_xpath)
-        token_count = await token_matches.count()
-        for i in range(token_count):
-            node = token_matches.nth(i)
-            if await node.is_visible():
-                return node
 
-    raise CaliforniaAutomationError(f"Could not find visible label anchor for '{label_text}'.")
+        for row in row_candidates:
+            if await row.count() == 0:
+                continue
+            controls = row.locator(control_selector)
+            if await controls.count() > 0:
+                return controls
+
+    _log_field_failure(label_text, normalized, "row strategy: anchor found but no control in nearby row/container")
+    return None
+
+
+async def _try_get_by_label_strategy(
+    page: Page,
+    label_text: str,
+    normalized: str,
+    control_selector: str,
+) -> Optional[Locator]:
+    candidates = (label_text, normalized)
+    for candidate in candidates:
+        label_match = page.get_by_label(candidate, exact=False)
+        if await label_match.count() <= 0:
+            continue
+        control_match = label_match.locator("xpath=self::input|self::textarea|self::select").first
+        if await control_match.count() > 0:
+            return control_match
+        descendants = label_match.locator(control_selector)
+        if await descendants.count() > 0:
+            return descendants
+
+    _log_field_failure(label_text, normalized, "get_by_label fallback: no matching controls")
+    return None
+
+
+async def _try_following_xpath_strategy(
+    page: Page,
+    label_text: str,
+    normalized: str,
+    control_selector: str,
+) -> Optional[Locator]:
+    escaped = _xpath_literal(normalized)
+    anchor_xpath = (
+        "//*[contains(translate(normalize-space(string(.)), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ*:',"
+        "'abcdefghijklmnopqrstuvwxyz  '), "
+        f"{escaped})]"
+    )
+
+    controls_xpath = _selector_to_xpath_for_following(control_selector)
+    if not controls_xpath:
+        return None
+
+    locator = page.locator(f"xpath=({anchor_xpath})[1]/following::{controls_xpath}[1]")
+    if await locator.count() > 0:
+        return locator
+
+    _log_field_failure(label_text, normalized, "xpath fallback: no following control found")
+    return None
+
+
+async def _find_label_anchors(page: Page, normalized_label: str) -> list[Locator]:
+    escaped = _xpath_literal(normalized_label)
+    xpath = (
+        "xpath=//*[contains(translate(normalize-space(string(.)), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ*:',"
+        "'abcdefghijklmnopqrstuvwxyz  '), "
+        f"{escaped})]"
+    )
+    candidates = page.locator(xpath)
+    count = await candidates.count()
+    visible: list[Locator] = []
+    for index in range(count):
+        node = candidates.nth(index)
+        if await node.is_visible():
+            visible.append(node)
+    return visible
+
+
+def _selector_to_xpath_for_following(control_selector: str) -> str:
+    if control_selector == _TEXT_CONTROL_SELECTOR:
+        return "input[not(@type='hidden')] | textarea"
+    if control_selector == _SELECT_CONTROL_SELECTOR:
+        return "select"
+    if control_selector == _RADIO_CONTROL_SELECTOR:
+        return "input[@type='radio']"
+    if control_selector == _CHECKBOX_CONTROL_SELECTOR:
+        return "input[@type='checkbox']"
+    return ""
+
+
+def _xpath_literal(value: str) -> str:
+    if "'" not in value:
+        return f"'{value}'"
+    if '"' not in value:
+        return f'"{value}"'
+    pieces = value.split("'")
+    joined = ", \"'\", ".join(f"'{piece}'" for piece in pieces)
+    return f"concat({joined})"
+
+
+def _normalize_label(text: str) -> str:
+    return " ".join(text.replace("*", "").replace(":", "").strip().lower().split())
+
+
+def _log_field_success(label_text: str, strategy: str) -> None:
+    normalized = _normalize_label(label_text)
+    print(
+        f"CA debug -> field='{label_text}' label='{label_text}' normalized='{normalized}' strategy='{strategy}'"
+    )
+
+
+def _log_field_failure(label_text: str, normalized: str, reason: str) -> None:
+    print(
+        f"CA debug -> field='{label_text}' label='{label_text}' normalized='{normalized}' failure='{reason}'"
+    )
 
 
 async def _pick_radio_by_semantics(radios: Locator, yes_value: bool) -> Locator:
@@ -363,10 +470,6 @@ async def _click_radio_label_for_input(row: Locator, radio: Locator) -> bool:
         return True
 
     return False
-
-
-def _normalize_label(text: str) -> str:
-    return " ".join(text.replace("*", "").replace(":", "").strip().lower().split())
 
 
 def _debug_field(field_name: str, value: str) -> None:
