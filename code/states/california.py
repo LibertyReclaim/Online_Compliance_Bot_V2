@@ -131,10 +131,12 @@ async def _fill_ca_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     negative = _resolve_negative_report(negative_raw, record.get("amount_to_remit"))
     print(f"CA debug -> negative_report raw='{_as_string(negative_raw)}' resolved={negative}")
     await _guarded(errors, "radio 'This is a Negative Report'", lambda: _set_yes_no_radio_by_label(page, "This is a Negative Report", negative))
-    print(f"CA debug -> selected Negative Report = {'Yes' if negative else 'No'}")
+    print(f"CA debug -> intended Negative Report radio='{'Yes' if negative else 'No'}'")
 
-    safe_box = _as_bool(record.get("safe_deposit_box"))
+    safe_box_raw = record.get("safe_deposit_box")
+    safe_box = _as_bool(safe_box_raw)
     if safe_box is not None:
+        print(f"CA debug -> safe_deposit_box raw='{_as_string(safe_box_raw)}' resolved={safe_box}")
         await _guarded(errors, "radio 'Includes Safe Deposit Box'", lambda: _set_yes_no_radio_by_label(page, "Includes Safe Deposit Box", safe_box))
 
     total_cash = _as_string(record.get("amount_to_remit"))
@@ -266,10 +268,26 @@ def _as_float(value: Any) -> Optional[float]:
 
 async def _set_yes_no_radio_by_label(page: Page, label_text: str, yes_value: bool) -> None:
     controls, matched, row_count, strategy = await _resolve_nearest_control_collection(page, label_text, _RADIO_SELECTOR, "radio")
-    target = await _pick_radio_by_semantics(controls, yes_value)
-    row = target.locator("xpath=ancestor::*[self::div or self::tr or self::td][1]")
-    if not await _click_radio_label_for_input(row, target):
-        await target.set_checked(True, force=True)
+    target_text = "yes" if yes_value else "no"
+    target_radio = await _find_radio_by_visible_text(controls, target_text)
+
+    if target_radio is None:
+        target_radio = await _pick_radio_by_semantics(controls, yes_value)
+
+    row = target_radio.locator("xpath=ancestor::*[self::div or self::tr or self::td][1]")
+    if not await _click_radio_label_for_input(row, target_radio):
+        await target_radio.set_checked(True, force=True)
+
+    await page.wait_for_timeout(150)
+
+    actual_checked = await _get_checked_radio_label_text(controls)
+    if _normalize_label(actual_checked) != target_text:
+        if not await _click_radio_label_for_input(row, target_radio):
+            await target_radio.set_checked(True, force=True)
+        await page.wait_for_timeout(150)
+        actual_checked = await _get_checked_radio_label_text(controls)
+
+    print(f"CA debug -> actual checked {label_text} radio='{actual_checked}'")
     _log_success("CA", label_text, matched, row_count, strategy)
 
 
@@ -416,6 +434,55 @@ async def _row_has_other_known_labels(row: Locator, current_normalized: str) -> 
         if hits >= 2:
             return True
     return False
+
+
+async def _find_radio_by_visible_text(radios: Locator, target_text: str) -> Optional[Locator]:
+    count = await radios.count()
+    normalized_target = _normalize_label(target_text)
+    for i in range(count):
+        radio = radios.nth(i)
+        label_text = _normalize_label(await _radio_label_text(radio))
+        if label_text == normalized_target:
+            return radio
+    for i in range(count):
+        radio = radios.nth(i)
+        label_text = _normalize_label(await _radio_label_text(radio))
+        if normalized_target in label_text:
+            return radio
+    return None
+
+
+async def _get_checked_radio_label_text(radios: Locator) -> str:
+    count = await radios.count()
+    for i in range(count):
+        radio = radios.nth(i)
+        if await radio.is_checked():
+            return await _radio_label_text(radio)
+    return ""
+
+
+async def _radio_label_text(radio: Locator) -> str:
+    radio_id = await _safe_attr(radio, "id")
+    if radio_id:
+        by_for = radio.locator(f"xpath=ancestor::*[self::div or self::tr or self::td][1]//label[@for='{radio_id}']").first
+        if await by_for.count() > 0:
+            text = _clean_ws(await by_for.inner_text())
+            if text:
+                return text
+
+    sibling = radio.locator("xpath=following-sibling::label[1]").first
+    if await sibling.count() > 0:
+        text = _clean_ws(await sibling.inner_text())
+        if text:
+            return text
+
+    parent = radio.locator("xpath=ancestor::label[1]").first
+    if await parent.count() > 0:
+        text = _clean_ws(await parent.inner_text())
+        if text:
+            return text
+
+    return _clean_ws(await _safe_attr(radio, "value"))
 
 
 async def _pick_radio_by_semantics(radios: Locator, yes_value: bool) -> Locator:
