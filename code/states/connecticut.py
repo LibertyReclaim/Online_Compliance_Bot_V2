@@ -265,8 +265,6 @@ async def _find_label_anchors(page: Page, label_text: str) -> list[Locator]:
         text = _clean_ws(await node.inner_text())
         if not text:
             continue
-        if len(text) > 120:
-            continue
         anchors.append((len(text), node))
 
     anchors.sort(key=lambda item: item[0])

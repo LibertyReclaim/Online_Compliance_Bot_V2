@@ -311,7 +311,7 @@ async def _choose_nearest_row_control(
             all_count = await row.locator(_ALL_CONTROLS_SELECTOR).count()
             if all_count == 0:
                 continue
-            if all_count > 5 or await _row_has_other_known_labels(row, current_label):
+            if all_count > 20:
                 print(f"NY debug -> field='{matched}' rejected broad row with {all_count} inputs")
                 continue
             typed = row.locator(selector)
@@ -341,54 +341,30 @@ async def _fallback_get_by_label(
 
 
 async def _find_label_anchors(page: Page, normalized_label: str) -> list[tuple[Locator, str]]:
-    base_xpath = (
-        "//*[contains(translate(normalize-space(string(.)), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ*:',"
+    xpath = (
+        "xpath=//*[contains(translate(normalize-space(string(.)), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ*:',"
         "'abcdefghijklmnopqrstuvwxyz  '), "
         f"{_xpath_literal(normalized_label)})]"
     )
-    scoped = page.locator(f"xpath={base_xpath}[self::label or self::span or self::div or self::p or self::td]")
-    broad = page.locator(f"xpath={base_xpath}")
-
-    anchors = await _collect_filtered_label_nodes(scoped, normalized_label)
-    if anchors:
-        return anchors
-    return await _collect_filtered_label_nodes(broad, normalized_label)
-
-
-async def _collect_filtered_label_nodes(locator: Locator, normalized_label: str) -> list[tuple[Locator, str]]:
-    results: list[tuple[Locator, str]] = []
-    count = await locator.count()
+    matches = page.locator(xpath)
+    count = await matches.count()
+    anchors: list[tuple[Locator, str]] = []
     for i in range(count):
-        node = locator.nth(i)
+        node = matches.nth(i)
         if not await node.is_visible():
             continue
         text = _clean_ws(await node.inner_text())
         if not text:
             continue
-        normalized_text = _normalize_label(text)
-        if normalized_label not in normalized_text:
-            continue
-        if len(text) > 100:
-            continue
-        if _count_known_labels(normalized_text) > 2:
-            continue
-        results.append((node, text))
+        anchors.append((node, text))
 
-    results.sort(key=lambda item: len(item[1]))
-    return results
+    anchors.sort(key=lambda item: len(item[1]))
+    return anchors
 
 
 async def _row_has_other_known_labels(row: Locator, current_normalized: str) -> bool:
-    text = _normalize_label(await row.inner_text())
-    hits = 0
-    for label in _ALL_FIELD_LABELS:
-        normalized = _normalize_label(label)
-        if normalized == current_normalized:
-            continue
-        if normalized and normalized in text:
-            hits += 1
-        if hits >= 2:
-            return True
+    _ = row
+    _ = current_normalized
     return False
 
 
