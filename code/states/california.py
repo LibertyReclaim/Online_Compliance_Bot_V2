@@ -36,11 +36,20 @@ _EMAIL_FIELDS: tuple[_FieldSpec, ...] = (
 )
 
 _DROPDOWN_FIELDS: tuple[_FieldSpec, ...] = (
-    _FieldSpec("Report Type", "ca_report_type"),
-    _FieldSpec("Submission Type", "ca_submission_type"),
-    _FieldSpec("Report Year", "ca_report_year"),
-    _FieldSpec("Fiscal Year End", "ca_fiscal_year_end_month"),
+    _FieldSpec("Report Type", "report_type"),
+    _FieldSpec("Submission Type", "submission_type"),
+    _FieldSpec("Report Year", "report_year"),
+    _FieldSpec("Fiscal Year End", "fiscal_year_end_month"),
 )
+
+
+_CA_VALID_REPORT_TYPES: set[str] = {
+    "annual report",
+    "sco audit report",
+    "agent report",
+    "life insurance",
+    "voluntary compliance program report",
+}
 
 _ALL_FIELD_LABELS: tuple[str, ...] = tuple({
     *[f.label for f in _TEXT_FIELDS],
@@ -101,31 +110,35 @@ async def _fill_ca_holder_info_page(page: Page, record: Dict[str, Any], errors: 
 
     for field in _DROPDOWN_FIELDS:
         value = _as_string(record.get(field.key))
+        if field.key == "report_type" and value:
+            normalized_report_type = _normalize_label(value)
+            if normalized_report_type not in _CA_VALID_REPORT_TYPES:
+                print("Invalid CA report_type value")
         if value:
             await _guarded(errors, f"dropdown '{field.label}'", lambda: _select_dropdown_by_label(page, field.label, value))
 
-    submission_type = _as_string(record.get("ca_submission_type"))
+    submission_type = _as_string(record.get("submission_type"))
     is_remit_report = submission_type.lower() == "remit report"
 
-    remit_id = _as_string(record.get("ca_remit_report_id"))
-    funds = _as_string(record.get("ca_funds_remitted_via"))
+    remit_id = _as_string(record.get("remit_report_id"))
+    funds = _as_string(record.get("funds_remitted_via"))
     if is_remit_report and remit_id:
         await _guarded(errors, "text 'Remit Report ID'", lambda: _fill_text_by_label(page, "Remit Report ID", remit_id))
     if is_remit_report and funds:
         await _guarded(errors, "dropdown 'Funds Remitted Via'", lambda: _select_dropdown_by_label(page, "Funds Remitted Via", funds))
 
-    negative = _as_bool(record.get("ca_negative_report"))
+    negative = _as_bool(record.get("negative_report"))
     if negative is not None:
         await _guarded(errors, "radio 'This is a Negative Report'", lambda: _set_yes_no_radio_by_label(page, "This is a Negative Report", negative))
 
-    safe_box = _as_bool(record.get("ca_safe_deposit_box"))
+    safe_box = _as_bool(record.get("safe_deposit_box"))
     if safe_box is not None:
         await _guarded(errors, "radio 'Includes Safe Deposit Box'", lambda: _set_yes_no_radio_by_label(page, "Includes Safe Deposit Box", safe_box))
 
-    total_cash = _as_string(record.get("ca_total_cash"))
-    total_shares = _as_string(record.get("ca_total_shares"))
+    total_cash = _as_string(record.get("amount_to_remit"))
+    total_shares = _as_string(record.get("total_shares"))
     if negative is False and not total_cash:
-        errors.append("ca_total_cash is required when ca_negative_report is No.")
+        errors.append("amount_to_remit is required when negative_report is No.")
 
     cash_label = "Total Cash Remitted" if is_remit_report else "Total Cash Reported"
     shares_label = "Total Shares Remitted" if is_remit_report else "Total Shares Reported"
