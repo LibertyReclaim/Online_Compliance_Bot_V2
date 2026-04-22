@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 from playwright.async_api import Locator, Page
@@ -25,9 +26,27 @@ def _normalize(text: str) -> str:
 
 def _normalize_value_for_compare(value: str) -> str:
     lowered = str(value).strip().lower()
-    # formatting-aware compare for FEIN/phone/ZIP-like values.
     compact = re.sub(r"[\s\-\(\)\./]", "", lowered)
     return re.sub(r"[^a-z0-9]", "", compact)
+
+
+def _looks_like_amount_field(label_text: str) -> bool:
+    label = _normalize(label_text)
+    tokens = ("amount", "cash", "remitted", "reported", "dollars", "shares", "total")
+    return any(token in label for token in tokens)
+
+
+def _parse_currency_value(value: str) -> Optional[Decimal]:
+    raw = str(value).strip()
+    if not raw:
+        return None
+    cleaned = raw.replace("$", "").replace(",", "").replace(" ", "")
+    if cleaned.startswith("(") and cleaned.endswith(")"):
+        cleaned = f"-{cleaned[1:-1]}"
+    try:
+        return Decimal(cleaned)
+    except (InvalidOperation, ValueError):
+        return None
 
 
 def _short(text: str, max_len: int = 90) -> str:
@@ -123,7 +142,6 @@ async def _collect_label_candidates(page: Page, label_text: str) -> list[tuple[L
 
         candidates.append((node, text, score))
 
-    # Prefer exact, then startswith, then contains; always prefer shortest text.
     candidates.sort(key=lambda item: (item[2], len(item[1])))
     return [(node, text) for node, text, _ in candidates]
 
@@ -161,8 +179,7 @@ async def locate_strict_row_for_label(page: Page, label_text: str, control_type:
             row_text = await _safe_inner_text(row)
             candidate_chars = len(_normalize(row_text))
 
-            # Early broad-container rejection (fast path).
-            if candidate_chars > _MAX_ROW_CHARS:
+            if control_type != "dropdown" and candidate_chars > _MAX_ROW_CHARS:
                 print(
                     f"{state_tag} debug -> field='{label_text}' matched_label='{_short(matched_label)}' "
                     f"candidate_chars={candidate_chars} controls=? rejected='row text too long'"
@@ -193,8 +210,8 @@ async def locate_strict_row_for_label(page: Page, label_text: str, control_type:
                 accepted = 1 <= text_count <= 2 and select_count <= 2
                 reason = "text controls out of range"
             elif control_type == "dropdown":
-                accepted = select_count == 1
-                reason = "dropdown count not equal to 1"
+                accepted = select_count == 1 and text_count <= 1 and radio_count <= 2 and checkbox_count <= 1
+                reason = "dropdown structure mismatch"
             elif control_type == "radio":
                 accepted = 2 <= radio_count <= 6
                 reason = "radio count out of range"
@@ -228,6 +245,17 @@ async def fill_text_field(page: Page, label_text: str, value: str, state_tag: st
     await control.blur()
 
     actual = await control.input_value()
+
+    if _looks_like_amount_field(label_text):
+        expected_num = _parse_currency_value(value)
+        actual_num = _parse_currency_value(actual)
+        if expected_num is not None and actual_num is not None and expected_num == actual_num:
+            print(
+                f"{state_tag} debug -> field='{label_text}' raw_actual='{actual}' raw_expected='{value}' "
+                f"numeric_actual='{actual_num}' numeric_expected='{expected_num}' accepted='currency match' strategy='strict row {_short(matched)}'"
+            )
+            return
+
     expected_norm = _normalize_value_for_compare(value)
     actual_norm = _normalize_value_for_compare(actual)
 
