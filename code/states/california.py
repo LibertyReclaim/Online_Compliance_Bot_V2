@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional
 
 from playwright.async_api import Locator, Page, TimeoutError as PlaywrightTimeoutError
 
+from states.field_helpers import fill_text_field, select_dropdown_field, set_radio_field
+
 CA_HOLDER_INFO_URL = "https://claimit.ca.gov/app/holder-info"
 
 
@@ -167,20 +169,41 @@ async def _upload_naupa_file(page: Page, file_path: Path) -> None:
         print("CA warning: NAUPA file not found, skipping upload and leaving tab open for manual action.")
         return
 
-    file_inputs = page.locator("input[type='file']")
-    if (await file_inputs.count()) > 0:
-        await file_inputs.first.set_input_files(str(file_path))
-        await page.wait_for_timeout(1200)
-        return
+    selectors = [
+        "input[type='file']",
+        "input[type='file']:visible",
+        "input[accept]",
+        "input[type='file'][accept]",
+    ]
 
-    if await _click_add_document_if_present(page):
-        file_inputs = page.locator("input[type='file']")
-        if (await file_inputs.count()) > 0:
-            await file_inputs.first.set_input_files(str(file_path))
+    for _ in range(3):
+        for selector in selectors:
+            locator = page.locator(selector)
+            count = await locator.count()
+            print(f"CA debug -> upload selector='{selector}' count={count}")
+            if count <= 0:
+                continue
+            try:
+                await locator.first.set_input_files(str(file_path))
+                value = await locator.first.get_attribute("value")
+                print(f"CA debug -> upload success selector='{selector}' value='{value}'")
+                await page.wait_for_timeout(1200)
+                return
+            except Exception as exc:
+                print(f"CA debug -> upload selector '{selector}' failed: {exc}")
+        await page.wait_for_timeout(800)
+
+    upload_buttons = page.get_by_role("button", name="Upload", exact=False)
+    if await upload_buttons.count() > 0:
+        await upload_buttons.first.click()
+        await page.wait_for_timeout(500)
+        locator = page.locator("input[type='file']")
+        if await locator.count() > 0:
+            await locator.first.set_input_files(str(file_path))
             await page.wait_for_timeout(1200)
             return
 
-    raise CaliforniaAutomationError("Could not find CA upload file input (input[type='file']).")
+    raise CaliforniaAutomationError("Could not find CA upload file input. Attempted selectors: input[type='file'], input[type='file']:visible, input[accept], input[type='file'][accept].")
 
 
 async def _click_add_document_if_present(page: Page) -> bool:
@@ -223,15 +246,11 @@ _ALL_CONTROLS_SELECTOR = "input:not([type='hidden']), select, textarea"
 
 
 async def _fill_text_by_label(page: Page, label_text: str, value: str) -> None:
-    control, matched, row_count, strategy = await _resolve_nearest_control(page, label_text, _TEXT_SELECTOR, "text")
-    await control.fill(value)
-    _log_success("CA", label_text, matched, row_count, strategy)
+    await fill_text_field(page, label_text, value, "CA")
 
 
 async def _select_dropdown_by_label(page: Page, label_text: str, value: str) -> None:
-    control, matched, row_count, strategy = await _resolve_nearest_control(page, label_text, _SELECT_SELECTOR, "select")
-    await control.select_option(label=value)
-    _log_success("CA", label_text, matched, row_count, strategy)
+    await select_dropdown_field(page, label_text, value, "CA")
 
 
 async def _fill_text_if_enabled_by_label(page: Page, label_text: str, value: str) -> None:
@@ -267,28 +286,7 @@ def _as_float(value: Any) -> Optional[float]:
 
 
 async def _set_yes_no_radio_by_label(page: Page, label_text: str, yes_value: bool) -> None:
-    controls, matched, row_count, strategy = await _resolve_nearest_control_collection(page, label_text, _RADIO_SELECTOR, "radio")
-    target_text = "yes" if yes_value else "no"
-    target_radio = await _find_radio_by_visible_text(controls, target_text)
-
-    if target_radio is None:
-        target_radio = await _pick_radio_by_semantics(controls, yes_value)
-
-    row = target_radio.locator("xpath=ancestor::*[self::div or self::tr or self::td][1]")
-    if not await _click_radio_label_for_input(row, target_radio):
-        await target_radio.set_checked(True, force=True)
-
-    await page.wait_for_timeout(150)
-
-    actual_checked = await _get_checked_radio_label_text(controls)
-    if _normalize_label(actual_checked) != target_text:
-        if not await _click_radio_label_for_input(row, target_radio):
-            await target_radio.set_checked(True, force=True)
-        await page.wait_for_timeout(150)
-        actual_checked = await _get_checked_radio_label_text(controls)
-
-    print(f"CA debug -> actual checked {label_text} radio='{actual_checked}'")
-    _log_success("CA", label_text, matched, row_count, strategy)
+    await set_radio_field(page, label_text, yes_value, "CA")
 
 
 async def _resolve_nearest_control(

@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional
 
 from playwright.async_api import Locator, Page, TimeoutError as PlaywrightTimeoutError
 
+from states.field_helpers import fill_text_field, select_dropdown_field, set_radio_field
+
 CT_HOLDER_INFO_URL = "https://ctbiglist.gov/app/holder-info"
 
 
@@ -178,41 +180,15 @@ _RADIO_SELECTOR = "input[type='radio']"
 
 
 async def _fill_text_by_label(page: Page, label_text: str, value: str) -> None:
-    control, strategy = await _resolve_control(page, label_text, _TEXT_SELECTOR, "TEXT")
-    await control.fill(value)
-    print(f"CT debug -> field='{label_text}' type='TEXT' value='{value}' strategy='{strategy}'")
+    await fill_text_field(page, label_text, value, "CT")
 
 
 async def _select_dropdown_by_label(page: Page, label_text: str, value: str) -> None:
-    control, strategy = await _resolve_control(page, label_text, _SELECT_SELECTOR, "DROPDOWN")
-    used = await _select_option_resilient(control, label_text, value)
-    print(f"CT debug -> field='{label_text}' type='DROPDOWN' value='{value}' strategy='{strategy} + {used}'")
+    await select_dropdown_field(page, label_text, value, "CT")
 
 
 async def _set_yes_no_radio_by_label(page: Page, label_text: str, yes_value: bool) -> None:
-    controls, strategy = await _resolve_control_collection(page, label_text, _RADIO_SELECTOR, "RADIO")
-    target_text = "yes" if yes_value else "no"
-
-    target = await _find_radio_by_visible_text(controls, target_text)
-    if target is None:
-        raise ConnecticutAutomationError(f"Could not find '{target_text}' radio for '{label_text}'.")
-
-    row = target.locator("xpath=ancestor::*[self::div or self::tr or self::td][1]")
-    clicked = await _click_radio_label_for_input(row, target)
-    if not clicked:
-        await target.set_checked(True, force=True)
-
-    await page.wait_for_timeout(150)
-
-    actual_checked = await _get_checked_radio_label_text(controls)
-    if _normalize(actual_checked) != target_text:
-        if not await _click_radio_label_for_input(row, target):
-            await target.set_checked(True, force=True)
-        await page.wait_for_timeout(150)
-        actual_checked = await _get_checked_radio_label_text(controls)
-
-    print(f"CT debug -> field='{label_text}' type='RADIO' value='{'Yes' if yes_value else 'No'}' strategy='{strategy}'")
-    print(f"CT debug -> actual checked {label_text} radio='{actual_checked}'")
+    await set_radio_field(page, label_text, yes_value, "CT")
 
 
 async def _resolve_control(page: Page, label_text: str, selector: str, field_type: str) -> tuple[Locator, str]:

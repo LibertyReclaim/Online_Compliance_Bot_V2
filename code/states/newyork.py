@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional
 
 from playwright.async_api import Locator, Page, TimeoutError as PlaywrightTimeoutError
 
+from states.field_helpers import fill_text_field, select_dropdown_field, set_checkbox_field, set_radio_field
+
 NY_HOLDER_INFO_URL = "https://ouf.osc.ny.gov/app/holder-info"
 
 
@@ -162,20 +164,41 @@ async def _upload_naupa_file(page: Page, file_path: Path) -> None:
     except PlaywrightTimeoutError:
         await page.wait_for_timeout(1500)
 
-    file_inputs = page.locator("input[type='file']")
-    if (await file_inputs.count()) > 0:
-        await file_inputs.first.set_input_files(str(file_path))
-        await page.wait_for_timeout(1200)
-        return
+    selectors = [
+        "input[type='file']",
+        "input[type='file']:visible",
+        "input[accept]",
+        "input[type='file'][accept]",
+    ]
 
-    if await _click_add_document_if_present(page):
-        file_inputs = page.locator("input[type='file']")
-        if (await file_inputs.count()) > 0:
-            await file_inputs.first.set_input_files(str(file_path))
+    for _ in range(3):
+        for selector in selectors:
+            locator = page.locator(selector)
+            count = await locator.count()
+            print(f"NY debug -> upload selector='{selector}' count={count}")
+            if count <= 0:
+                continue
+            try:
+                await locator.first.set_input_files(str(file_path))
+                value = await locator.first.get_attribute("value")
+                print(f"NY debug -> upload success selector='{selector}' value='{value}'")
+                await page.wait_for_timeout(1200)
+                return
+            except Exception as exc:
+                print(f"NY debug -> upload selector '{selector}' failed: {exc}")
+        await page.wait_for_timeout(800)
+
+    upload_buttons = page.get_by_role("button", name="Upload", exact=False)
+    if await upload_buttons.count() > 0:
+        await upload_buttons.first.click()
+        await page.wait_for_timeout(500)
+        locator = page.locator("input[type='file']")
+        if await locator.count() > 0:
+            await locator.first.set_input_files(str(file_path))
             await page.wait_for_timeout(1200)
             return
 
-    raise NewYorkAutomationError("Could not find NY upload file input (input[type='file']).")
+    raise NewYorkAutomationError("Could not find NY upload file input. Attempted selectors: input[type='file'], input[type='file']:visible, input[accept], input[type='file'][accept].")
 
 
 async def _click_add_document_if_present(page: Page) -> bool:
@@ -219,30 +242,19 @@ _ALL_CONTROLS_SELECTOR = "input:not([type='hidden']), select, textarea"
 
 
 async def _fill_text_by_label(page: Page, label_text: str, value: str) -> None:
-    control, matched, row_count, strategy = await _resolve_nearest_control(page, label_text, _TEXT_SELECTOR, "text")
-    await control.fill(value)
-    _log_success("NY", label_text, matched, row_count, strategy)
+    await fill_text_field(page, label_text, value, "NY")
 
 
 async def _select_dropdown_by_label(page: Page, label_text: str, value: str) -> None:
-    control, matched, row_count, strategy = await _resolve_nearest_control(page, label_text, _SELECT_SELECTOR, "select")
-    await _select_dropdown_resilient(control, label_text, value)
-    _log_success("NY", label_text, matched, row_count, strategy)
+    await select_dropdown_field(page, label_text, value, "NY")
 
 
 async def _set_yes_no_radio_by_label(page: Page, label_text: str, yes_value: bool) -> None:
-    controls, matched, row_count, strategy = await _resolve_nearest_control_collection(page, label_text, _RADIO_SELECTOR, "radio")
-    target = await _pick_radio_by_semantics(controls, yes_value)
-    row = target.locator("xpath=ancestor::*[self::div or self::tr or self::td][1]")
-    if not await _click_radio_label_for_input(row, target):
-        await target.set_checked(True, force=True)
-    _log_success("NY", label_text, matched, row_count, strategy)
+    await set_radio_field(page, label_text, yes_value, "NY")
 
 
 async def _set_checkbox_by_label(page: Page, label_text: str, should_check: bool) -> None:
-    control, matched, row_count, strategy = await _resolve_nearest_control(page, label_text, _CHECKBOX_SELECTOR, "checkbox")
-    await control.set_checked(should_check, force=True)
-    _log_success("NY", label_text, matched, row_count, strategy)
+    await set_checkbox_field(page, label_text, should_check, "NY")
 
 
 async def _resolve_nearest_control(
