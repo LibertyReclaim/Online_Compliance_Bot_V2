@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 from playwright.async_api import Locator, Page, TimeoutError as PlaywrightTimeoutError
 
-from states.field_helpers import fill_text_field, select_dropdown_field, set_radio_field, wait_for_field_enabled, FieldResolutionError
+from states.field_helpers import FieldResolutionError, fill_text_field, locate_strict_row_for_label, select_dropdown_field, set_radio_field
 
 CT_HOLDER_INFO_URL = "https://ctbiglist.gov/app/holder-info"
 
@@ -70,6 +70,7 @@ async def run(
     if errors:
         raise ConnecticutAutomationError("CT holder-info form completed with errors:\n- " + "\n- ".join(errors))
 
+    print("CT debug -> clicking Next after CT holder info completed")
     await _click_next(page)
     await _upload_naupa_file(page, naupa_path)
     await _click_next(page)
@@ -98,9 +99,7 @@ async def _fill_holder_info_page(page: Page, record: Dict[str, Any], errors: lis
 
     report_year = _as_string(record.get("report_year"))
     if report_year:
-        print("CT debug -> waiting for Report Year to become enabled after Report Type selection")
-        await _guarded(errors, "wait for 'Report Year' enabled", lambda: _wait_for_report_year_enabled(page))
-        await _guarded(errors, "dropdown 'Report Year'", lambda: _select_dropdown_by_label(page, "Report Year", report_year))
+        await _guarded(errors, "dropdown 'Report Year'", lambda: _set_or_accept_disabled_report_year(page, report_year))
 
     negative = _as_bool(record.get("negative_report"))
     if negative is None:
@@ -140,14 +139,33 @@ async def _fill_holder_info_page(page: Page, record: Dict[str, Any], errors: lis
 
 
 
-async def _wait_for_report_year_enabled(page: Page) -> None:
+async def _set_or_accept_disabled_report_year(page: Page, expected_year: str) -> None:
     try:
-        control = await wait_for_field_enabled(page, "Report Year", "dropdown", "CT", timeout_ms=10_000)
+        row, _ = await locate_strict_row_for_label(page, "Report Year", "dropdown", "CT")
     except FieldResolutionError as exc:
-        raise ConnecticutAutomationError("CT Report Year dropdown stayed disabled after selecting Report Type") from exc
+        raise ConnecticutAutomationError("CT could not locate Report Year dropdown row") from exc
 
+    control = row.locator("select").first
     enabled = await control.is_enabled()
-    print(f"CT debug -> Report Year enabled={'yes' if enabled else 'no'}")
+    current_text = (await control.evaluate("el => (el.selectedOptions[0]?.textContent || '').trim()"))
+    current_value = (await control.evaluate("el => (el.value || '').trim()"))
+
+    expected_norm = _normalize(expected_year)
+    text_norm = _normalize(str(current_text))
+    value_norm = _normalize(str(current_value))
+
+    print(
+        f"CT debug -> Report Year enabled={'yes' if enabled else 'no'} "
+        f"current_text='{current_text}' current_value='{current_value}' expected='{expected_year}'"
+    )
+
+    if not enabled:
+        if expected_norm in text_norm or expected_norm == value_norm:
+            print(f"CT debug -> Report Year disabled but already set to expected value '{expected_year}'; accepting as valid")
+            return
+        raise ConnecticutAutomationError("CT Report Year dropdown stayed disabled after selecting Report Type and did not match expected value")
+
+    await _select_dropdown_by_label(page, "Report Year", expected_year)
 
 async def _upload_naupa_file(page: Page, file_path: Path) -> None:
     try:
