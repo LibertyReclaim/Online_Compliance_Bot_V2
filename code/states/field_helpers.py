@@ -391,3 +391,33 @@ async def _radio_text(row: Locator, radio: Locator) -> str:
 
     value = await radio.get_attribute("value")
     return "" if value is None else value
+
+
+async def wait_for_field_enabled(
+    page: Page,
+    label_text: str,
+    control_type: str,
+    state_tag: str,
+    timeout_ms: int = 10_000,
+) -> Locator:
+    row, _ = await locate_strict_row_for_label(page, label_text, control_type, state_tag)
+
+    if control_type == "dropdown":
+        control = row.locator("select").first
+    elif control_type == "text":
+        control = row.locator("input:not([type='hidden']):not([type='radio']):not([type='checkbox']), textarea").first
+    elif control_type == "radio":
+        control = row.locator("input[type='radio']").first
+    else:
+        control = row.locator("input[type='checkbox']").first
+
+    deadline = asyncio.get_running_loop().time() + (timeout_ms / 1000)
+    while asyncio.get_running_loop().time() < deadline:
+        try:
+            if await control.is_enabled():
+                return control
+        except Exception:
+            pass
+        await asyncio.sleep(0.25)
+
+    raise FieldResolutionError(f"{state_tag} field '{label_text}' stayed disabled.")

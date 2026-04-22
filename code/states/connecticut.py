@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 from playwright.async_api import Locator, Page, TimeoutError as PlaywrightTimeoutError
 
-from states.field_helpers import fill_text_field, select_dropdown_field, set_radio_field
+from states.field_helpers import fill_text_field, select_dropdown_field, set_radio_field, wait_for_field_enabled, FieldResolutionError
 
 CT_HOLDER_INFO_URL = "https://ctbiglist.gov/app/holder-info"
 
@@ -90,15 +90,17 @@ async def _fill_holder_info_page(page: Page, record: Dict[str, Any], errors: lis
             continue
         await _guarded(errors, f"text '{field.label}'", lambda: _fill_text_by_label(page, field.label, value))
 
-    for field in _DROPDOWN_FIELDS:
-        value = _as_string(record.get(field.key))
-        if not value:
-            continue
+    report_type = _as_string(record.get("report_type"))
+    if report_type:
+        if _normalize(report_type) not in _CT_REPORT_TYPE_OPTIONS:
+            print(f"CT warning -> Invalid report_type value: '{report_type}'")
+        await _guarded(errors, "dropdown 'Report Type'", lambda: _select_dropdown_by_label(page, "Report Type", report_type))
 
-        if field.key == "report_type" and _normalize(value) not in _CT_REPORT_TYPE_OPTIONS:
-            print(f"CT warning -> Invalid report_type value: '{value}'")
-
-        await _guarded(errors, f"dropdown '{field.label}'", lambda: _select_dropdown_by_label(page, field.label, value))
+    report_year = _as_string(record.get("report_year"))
+    if report_year:
+        print("CT debug -> waiting for Report Year to become enabled after Report Type selection")
+        await _guarded(errors, "wait for 'Report Year' enabled", lambda: _wait_for_report_year_enabled(page))
+        await _guarded(errors, "dropdown 'Report Year'", lambda: _select_dropdown_by_label(page, "Report Year", report_year))
 
     negative = _as_bool(record.get("negative_report"))
     if negative is None:
@@ -135,6 +137,17 @@ async def _fill_holder_info_page(page: Page, record: Dict[str, Any], errors: lis
             lambda: _select_dropdown_by_label(page, "Funds Remitted Via", funds),
         )
 
+
+
+
+async def _wait_for_report_year_enabled(page: Page) -> None:
+    try:
+        control = await wait_for_field_enabled(page, "Report Year", "dropdown", "CT", timeout_ms=10_000)
+    except FieldResolutionError as exc:
+        raise ConnecticutAutomationError("CT Report Year dropdown stayed disabled after selecting Report Type") from exc
+
+    enabled = await control.is_enabled()
+    print(f"CT debug -> Report Year enabled={'yes' if enabled else 'no'}")
 
 async def _upload_naupa_file(page: Page, file_path: Path) -> None:
     try:
