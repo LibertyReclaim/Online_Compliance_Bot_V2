@@ -85,7 +85,7 @@ _REPORT_RADIOS: tuple[_RadioFieldSpec, ...] = (
 )
 
 _TOTAL_TEXT_FIELDS: tuple[_TextFieldSpec, ...] = (
-    _TextFieldSpec("Total Amount of the Report", "amount_to_remit", required=True),
+    _TextFieldSpec("Total Amount of the Report", "total_amount_of_report", required=True),
     _TextFieldSpec("Total Number of Items Reported", "total_items_reported", required=True),
     _TextFieldSpec("Total Number of Safekeeping Items", "total_safekeeping_items", required=True),
     _TextFieldSpec("Shares of Stocks or Mutual Funds Remitted", "shares_remitted", required=True),
@@ -146,7 +146,20 @@ async def _fill_tx_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     combined_file = _as_bool(record.get("combined_file"))
     await _fill_parent_company_fein(page, record, combined_file, errors)
 
+    total_amount_of_report = _as_string(record.get("total_amount_of_report"))
+    if not total_amount_of_report:
+        errors.append("total_amount_of_report is required for Total Amount of the Report.")
+    else:
+        print("TX debug -> field='Total Amount of the Report' mapped_from='total_amount_of_report'")
+        await _guarded(
+            errors,
+            "text 'Total Amount of the Report'",
+            lambda: _fill_text_by_label(page, "Total Amount of the Report", total_amount_of_report),
+        )
+
     for field in _TOTAL_TEXT_FIELDS:
+        if field.label == "Total Amount of the Report":
+            continue
         await _fill_required_text_field(page, field, record, errors)
 
     amount_to_remit = _as_string(record.get("amount_to_remit"))
@@ -181,28 +194,24 @@ async def _fill_parent_company_fein(
     parent_fein = _as_string(record.get("parent_company_fein"))
     label = "Parent Company FEIN"
 
-    if combined_file is False and not parent_fein:
-        print("TX debug -> field='Parent Company FEIN' skipped='not applicable because combined_file=No'")
+    if combined_file is False:
+        print("TX debug -> field='Parent Company FEIN' skipped='combined_file=No'")
         return
 
     try:
         row, _ = await locate_strict_row_for_label(page, label, "text", "TX")
     except FieldResolutionError as exc:
-        if combined_file is False:
-            print("TX debug -> field='Parent Company FEIN' skipped='not applicable because combined_file=No'")
-            return
         raise TexasAutomationError("TX could not locate Parent Company FEIN field") from exc
 
     control = row.locator("input:not([type='hidden']):not([type='radio']):not([type='checkbox']), textarea").first
     enabled = await control.is_enabled()
 
-    if not enabled and combined_file is False:
-        print("TX debug -> field='Parent Company FEIN' skipped='not applicable because combined_file=No'")
+    if not enabled:
+        print("TX debug -> field='Parent Company FEIN' skipped='disabled/read-only'")
         return
 
     if not parent_fein:
-        if combined_file:
-            errors.append("parent_company_fein is required when combined_file=Yes.")
+        errors.append("parent_company_fein is required when combined_file=Yes.")
         return
 
     print("TX debug -> field='Parent Company FEIN' type='TEXT'")
