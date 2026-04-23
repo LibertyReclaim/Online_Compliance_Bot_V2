@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from playwright.async_api import Locator, Page, TimeoutError as PlaywrightTimeoutError
+from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
 from states.field_helpers import FieldResolutionError, fill_text_field, locate_strict_row_for_label, select_dropdown_field, set_radio_field
 
@@ -80,12 +80,14 @@ async def _fill_nj_holder_info_page(page: Page, record: Dict[str, Any], errors: 
             continue
         if not value:
             continue
+        print(f"NJ debug -> field='{field.label}' type='TEXT'")
         await _guarded(errors, f"text '{field.label}'", lambda: _fill_text_by_label(page, field.label, value))
 
     report_type = _as_string(record.get("report_type"))
     if report_type:
         if _normalize(report_type) not in _NJ_REPORT_TYPE_OPTIONS:
             print(f"NJ warning -> Invalid report_type value: '{report_type}'")
+        print("NJ debug -> field='Report Type' type='DROPDOWN'")
         await _guarded(errors, "dropdown 'Report Type'", lambda: _select_dropdown_by_label(page, "Report Type", report_type))
 
     report_year = _as_string(record.get("report_year"))
@@ -104,20 +106,21 @@ async def _fill_nj_holder_info_page(page: Page, record: Dict[str, Any], errors: 
         print("NJ debug -> field='This is a Negative Report' type='RADIO' value='No' strategy='strict row'")
 
     amount_to_remit = _as_string(record.get("amount_to_remit"))
-    if negative:
-        print("NJ debug -> skipping Total Dollar Amount Remitted because negative_report=Yes")
+    if not amount_to_remit:
+        errors.append("amount_to_remit is required for NJ filing.")
     else:
-        if not amount_to_remit:
-            errors.append("amount_to_remit is required when negative_report is No.")
-        else:
-            await _guarded(
-                errors,
-                "text 'Total Dollar Amount Remitted'",
-                lambda: _fill_text_by_label(page, "Total Dollar Amount Remitted", amount_to_remit),
-            )
+        print("NJ debug -> field='Total Dollar Amount Remitted' type='TEXT'")
+        await _guarded(
+            errors,
+            "text 'Total Dollar Amount Remitted'",
+            lambda: _fill_text_by_label(page, "Total Dollar Amount Remitted", amount_to_remit),
+        )
 
-    payment_type = _as_string(record.get("payment_type"))
-    if payment_type:
+    payment_type = _as_string(record.get("funds_remitted_via"))
+    if not payment_type:
+        errors.append("funds_remitted_via is required for NJ Payment Type.")
+    else:
+        print("NJ debug -> field='Payment Type' mapped_from='funds_remitted_via'")
         await _guarded(errors, "dropdown 'Payment Type'", lambda: _select_dropdown_by_label(page, "Payment Type", payment_type))
 
 
@@ -143,7 +146,7 @@ async def _set_or_accept_disabled_report_year(page: Page, expected_year: str) ->
 
     if not enabled:
         if expected_norm in text_norm or expected_norm == value_norm:
-            print(f"NJ debug -> Report Year disabled but already set to expected value '{expected_year}'; accepting as valid")
+            print("NJ debug -> Report Year disabled but already correct; continuing")
             return
         raise NewJerseyAutomationError("NJ Report Year dropdown stayed disabled after selecting Report Type and did not match expected value")
 
