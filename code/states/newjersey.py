@@ -8,7 +8,13 @@ from typing import Any, Dict, Optional
 
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
-from states.field_helpers import FieldResolutionError, fill_text_field, locate_strict_row_for_label, select_dropdown_field, set_radio_field
+from states.field_helpers import (
+    FieldResolutionError,
+    fill_text_field,
+    locate_strict_row_for_label,
+    select_dropdown_field,
+    set_radio_field,
+)
 
 NJ_HOLDER_INFO_URL = "https://unclaimedfunds.nj.gov/app/holder-info"
 
@@ -32,14 +38,6 @@ _TEXT_FIELDS: tuple[_FieldSpec, ...] = (
     _FieldSpec("Email Address", "email"),
     _FieldSpec("Email Address Confirmation", "email"),
 )
-
-_NJ_REPORT_TYPE_OPTIONS: set[str] = {
-    "annual report",
-    "audit report",
-    "reciprocal report",
-    "supplemental report",
-    "voluntary disclosure agreement",
-}
 
 
 async def run(
@@ -83,12 +81,10 @@ async def _fill_nj_holder_info_page(page: Page, record: Dict[str, Any], errors: 
         print(f"NJ debug -> field='{field.label}' type='TEXT'")
         await _guarded(errors, f"text '{field.label}'", lambda: _fill_text_by_label(page, field.label, value))
 
-    report_type = _as_string(record.get("report_type"))
-    if report_type:
-        if _normalize(report_type) not in _NJ_REPORT_TYPE_OPTIONS:
-            print(f"NJ warning -> Invalid report_type value: '{report_type}'")
-        print("NJ debug -> field='Report Type' type='DROPDOWN'")
-        await _guarded(errors, "dropdown 'Report Type'", lambda: _select_dropdown_by_label(page, "Report Type", report_type))
+    raw_report_type = _as_string(record.get("report_type"))
+    if raw_report_type:
+        print(f"NJ debug -> raw report_type input='{raw_report_type}'")
+        await _guarded(errors, "dropdown 'Report Type'", lambda: _set_nj_report_type(page, raw_report_type))
 
     report_year = _as_string(record.get("report_year"))
     if report_year:
@@ -98,7 +94,11 @@ async def _fill_nj_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     if negative is None:
         raise NewJerseyAutomationError("negative_report is required for NJ filing.")
 
-    await _guarded(errors, "radio 'This is a Negative Report'", lambda: _set_yes_no_radio_by_label(page, "This is a Negative Report", negative))
+    await _guarded(
+        errors,
+        "radio 'This is a Negative Report'",
+        lambda: _set_yes_no_radio_by_label(page, "This is a Negative Report", negative),
+    )
 
     if negative:
         print("NJ debug -> field='This is a Negative Report' type='RADIO' value='Yes' strategy='strict row'")
@@ -124,6 +124,64 @@ async def _fill_nj_holder_info_page(page: Page, record: Dict[str, Any], errors: 
         await _guarded(errors, "dropdown 'Payment Type'", lambda: _select_dropdown_by_label(page, "Payment Type", payment_type))
 
 
+async def _set_nj_report_type(page: Page, raw_value: str) -> None:
+    expected_label = _normalize_nj_report_type(raw_value)
+    print(f"NJ debug -> normalized NJ report_type='{expected_label}'")
+
+    try:
+        row, _ = await locate_strict_row_for_label(page, "Report Type", "dropdown", "NJ")
+    except FieldResolutionError as exc:
+        raise NewJerseyAutomationError("NJ could not locate Report Type dropdown row") from exc
+
+    control = row.locator("select").first
+    current_text = _as_string(await control.evaluate("el => (el.selectedOptions[0]?.textContent || '').trim()"))
+    current_value = _as_string(await control.evaluate("el => (el.value || '').trim()"))
+
+    print(f"NJ debug -> current Report Type text='{current_text}'")
+
+    if _normalize_dropdown_text(current_text) == _normalize_dropdown_text(expected_label) or _normalize_dropdown_text(current_value) == _normalize_dropdown_text(expected_label):
+        print(f"NJ debug -> Report Type already set correctly to '{expected_label}'; continuing")
+        print("NJ debug -> Report Type already correct; continuing")
+        return
+
+    print(f"NJ debug -> selecting Report Type='{expected_label}'")
+
+    try:
+        await control.select_option(label=expected_label)
+    except Exception as primary_exc:
+        selected_by_text = await control.evaluate(
+            """
+            (el, expected) => {
+                const normalize = (value) => String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+                const option = Array.from(el.options).find((opt) => normalize(opt.textContent) === normalize(expected));
+                if (!option) return false;
+                if (option.disabled) return false;
+                option.selected = true;
+                el.value = option.value;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+            }
+            """,
+            expected_label,
+        )
+        if not selected_by_text:
+            latest_text = _as_string(await control.evaluate("el => (el.selectedOptions[0]?.textContent || '').trim()"))
+            if _normalize_dropdown_text(latest_text) == _normalize_dropdown_text(expected_label):
+                print("NJ debug -> Report Type already correct; continuing")
+                return
+            raise NewJerseyAutomationError(
+                f"NJ could not set Report Type to '{expected_label}' from input '{raw_value}'"
+            ) from primary_exc
+
+    latest_text = _as_string(await control.evaluate("el => (el.selectedOptions[0]?.textContent || '').trim()"))
+    print(f"NJ debug -> current Report Type text='{latest_text}'")
+    if _normalize_dropdown_text(latest_text) != _normalize_dropdown_text(expected_label):
+        raise NewJerseyAutomationError(
+            f"NJ Report Type expected '{expected_label}' but found '{latest_text or '[blank]'}'"
+        )
+
+
 async def _set_or_accept_disabled_report_year(page: Page, expected_year: str) -> None:
     try:
         row, _ = await locate_strict_row_for_label(page, "Report Year", "dropdown", "NJ")
@@ -135,9 +193,9 @@ async def _set_or_accept_disabled_report_year(page: Page, expected_year: str) ->
     current_text = await control.evaluate("el => (el.selectedOptions[0]?.textContent || '').trim()")
     current_value = await control.evaluate("el => (el.value || '').trim()")
 
-    expected_norm = _normalize(expected_year)
-    text_norm = _normalize(str(current_text))
-    value_norm = _normalize(str(current_value))
+    expected_norm = _normalize_dropdown_text(expected_year)
+    text_norm = _normalize_dropdown_text(str(current_text))
+    value_norm = _normalize_dropdown_text(str(current_value))
 
     print(
         f"NJ debug -> Report Year enabled={'yes' if enabled else 'no'} "
@@ -234,6 +292,35 @@ async def _guarded(errors: list[str], field_desc: str, action: Any) -> None:
         errors.append(message)
 
 
+def _normalize_nj_report_type(value: str) -> str:
+    raw = _as_string(value)
+    if not raw:
+        raise NewJerseyAutomationError("report_type is required for NJ filing.")
+
+    normalized = _normalize_dropdown_text(raw)
+    mapping = {
+        "annual": "Annual Report",
+        "annual report": "Annual Report",
+        "audit": "Audit Report",
+        "audit report": "Audit Report",
+        "reciprocal": "Reciprocal Report",
+        "reciprocal report": "Reciprocal Report",
+        "supplemental": "Supplemental Report",
+        "supplemental report": "Supplemental Report",
+        "voluntary disclosure": "Voluntary Disclosure Agreement",
+        "voluntary disclosure agreement": "Voluntary Disclosure Agreement",
+    }
+
+    if normalized in mapping:
+        return mapping[normalized]
+
+    raise NewJerseyAutomationError(f"Unsupported NJ report_type value: '{value}'")
+
+
+def _normalize_dropdown_text(text: str) -> str:
+    return " ".join(str(text).strip().lower().split())
+
+
 def _merge_records(holder_row: Dict[str, Any], payment_row: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(holder_row)
     merged.update(payment_row)
@@ -258,7 +345,3 @@ def _as_bool(value: Any) -> Optional[bool]:
     if normalized in {"no", "n", "false", "0"}:
         return False
     return None
-
-
-def _normalize(text: str) -> str:
-    return " ".join(str(text).replace("*", "").replace(":", "").strip().lower().split())
