@@ -53,6 +53,9 @@ _PRIMARY_TEXT_FIELDS: tuple[_TextFieldSpec, ...] = (
     _TextFieldSpec("Previous Business Name", "previous_business_name"),
     _TextFieldSpec("Previous FEIN", "previous_FEIN"),
     _TextFieldSpec("Primary Business Activity", "primary_business_activity"),
+)
+
+_LOCATION_TEXT_FIELDS: tuple[_TextFieldSpec, ...] = (
     _TextFieldSpec("Email", "email", required=True),
     _TextFieldSpec("Email Confirmation", "email", required=True),
     _TextFieldSpec("Address 1", "address_1", required=True),
@@ -63,12 +66,6 @@ _PRIMARY_TEXT_FIELDS: tuple[_TextFieldSpec, ...] = (
 
 _PRIMARY_DROPDOWNS: tuple[_DropdownFieldSpec, ...] = (
     _DropdownFieldSpec("State of Incorporation", "state_of_incorporation"),
-    _DropdownFieldSpec("Date of Incorporation month", "date_of_incorporation_month"),
-    _DropdownFieldSpec("Date of Incorporation day", "date_of_incorporation_day"),
-    _DropdownFieldSpec("Date of Incorporation year", "date_of_incorporation_year"),
-    _DropdownFieldSpec("Date of Dissolution month", "date_of_dissolution_month"),
-    _DropdownFieldSpec("Date of Dissolution day", "date_of_dissolution_day"),
-    _DropdownFieldSpec("Date of Dissolution year", "date_of_dissolution_year"),
     _DropdownFieldSpec("State", "state", required=True),
 )
 
@@ -77,19 +74,16 @@ _REPORT_DROPDOWNS: tuple[_DropdownFieldSpec, ...] = (
     _DropdownFieldSpec("Report Year", "report_year", required=True),
 )
 
-_REPORT_RADIOS: tuple[_RadioFieldSpec, ...] = (
-    _RadioFieldSpec("Is this the first time this business entity has filed an Unclaimed Property Report?", "first_time_report"),
-    _RadioFieldSpec("Does this report include records that are subject to the HIPAA Privacy Rule?", "includes_hipaa_records"),
-    _RadioFieldSpec("Is this a combined file containing multiple reports for related entities under the same parent company?", "combined_file"),
-    _RadioFieldSpec("Is this a Negative Report?", "negative_report"),
-)
-
 _TOTAL_TEXT_FIELDS: tuple[_TextFieldSpec, ...] = (
-    _TextFieldSpec("Total Amount of the Report", "total_amount_of_report", required=True),
     _TextFieldSpec("Total Number of Items Reported", "total_items_reported", required=True),
     _TextFieldSpec("Total Number of Safekeeping Items", "total_safekeeping_items", required=True),
     _TextFieldSpec("Shares of Stocks or Mutual Funds Remitted", "shares_remitted", required=True),
 )
+
+_FIRST_TIME_RADIO = "Is this the first time this business entity has filed an Unclaimed Property Report?"
+_HIPAA_RADIO = "Does this report include records that are subject to the HIPAA Privacy Rule?"
+_COMBINED_FILE_RADIO = "Is this a combined file containing multiple reports for related entities under the same parent company?"
+_NEGATIVE_REPORT_RADIO = "This is a Negative Report"
 
 
 async def run(
@@ -129,22 +123,86 @@ async def _fill_tx_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     for field in _PRIMARY_TEXT_FIELDS:
         await _fill_required_text_field(page, field, record, errors)
 
-    for field in _PRIMARY_DROPDOWNS:
-        await _set_dropdown_with_disabled_acceptance(page, field, record, errors)
+    state_of_incorp = _as_string(record.get("state_of_incorporation"))
+    if state_of_incorp:
+        print("TX debug -> field='State of Incorporation' type='DROPDOWN'")
+        await _guarded(
+            errors,
+            "dropdown 'State of Incorporation'",
+            lambda: _set_dropdown_or_accept_disabled(page, "State of Incorporation", state_of_incorp),
+        )
+
+    await _fill_date_triplet(
+        page,
+        "Date of Incorporation",
+        _as_string(record.get("date_of_incorporation_month")),
+        _as_string(record.get("date_of_incorporation_day")),
+        _as_string(record.get("date_of_incorporation_year")),
+        errors,
+    )
+    await _fill_date_triplet(
+        page,
+        "Date of Dissolution",
+        _as_string(record.get("date_of_dissolution_month")),
+        _as_string(record.get("date_of_dissolution_day")),
+        _as_string(record.get("date_of_dissolution_year")),
+        errors,
+    )
+
+    first_time = _as_bool(record.get("first_time_report"))
+    if first_time is None:
+        errors.append("first_time_report is required for TX filing.")
+    else:
+        print(f"TX debug -> field='{_FIRST_TIME_RADIO}' type='RADIO'")
+        await _guarded(
+            errors,
+            f"radio '{_FIRST_TIME_RADIO}'",
+            lambda: _set_yes_no_radio_by_label(page, _FIRST_TIME_RADIO, first_time),
+        )
+
+    for field in _LOCATION_TEXT_FIELDS:
+        await _fill_required_text_field(page, field, record, errors)
+
+    state_value = _as_string(record.get("state"))
+    if state_value:
+        print("TX debug -> field='State' type='DROPDOWN'")
+        await _guarded(errors, "dropdown 'State'", lambda: _set_dropdown_or_accept_disabled(page, "State", state_value))
+    else:
+        errors.append("state is required for 'State'.")
 
     for field in _REPORT_DROPDOWNS:
         await _set_dropdown_with_disabled_acceptance(page, field, record, errors)
 
-    for field in _REPORT_RADIOS:
-        value = _as_bool(record.get(field.key))
-        if value is None:
-            errors.append(f"{field.key} is required for TX filing.")
-            continue
-        print(f"TX debug -> field='{field.label}' type='RADIO'")
-        await _guarded(errors, f"radio '{field.label}'", lambda f=field, v=value: _set_yes_no_radio_by_label(page, f.label, v))
+    hipaa = _as_bool(record.get("includes_hipaa_records"))
+    if hipaa is None:
+        errors.append("includes_hipaa_records is required for TX filing.")
+    else:
+        print(f"TX debug -> field='{_HIPAA_RADIO}' type='RADIO'")
+        await _guarded(errors, f"radio '{_HIPAA_RADIO}'", lambda: _set_yes_no_radio_by_label(page, _HIPAA_RADIO, hipaa))
 
     combined_file = _as_bool(record.get("combined_file"))
+    if combined_file is None:
+        errors.append("combined_file is required for TX filing.")
+    else:
+        print(f"TX debug -> field='{_COMBINED_FILE_RADIO}' type='RADIO'")
+        await _guarded(
+            errors,
+            f"radio '{_COMBINED_FILE_RADIO}'",
+            lambda: _set_yes_no_radio_by_label(page, _COMBINED_FILE_RADIO, combined_file),
+        )
+
     await _fill_parent_company_fein(page, record, combined_file, errors)
+
+    negative = _as_bool(record.get("negative_report"))
+    if negative is None:
+        errors.append("negative_report is required for TX filing.")
+    else:
+        print(f"TX debug -> field='{_NEGATIVE_REPORT_RADIO}' type='RADIO'")
+        await _guarded(
+            errors,
+            f"radio '{_NEGATIVE_REPORT_RADIO}'",
+            lambda: _set_yes_no_radio_by_label(page, _NEGATIVE_REPORT_RADIO, negative),
+        )
 
     total_amount_of_report = _as_string(record.get("total_amount_of_report"))
     if not total_amount_of_report:
@@ -158,8 +216,6 @@ async def _fill_tx_holder_info_page(page: Page, record: Dict[str, Any], errors: 
         )
 
     for field in _TOTAL_TEXT_FIELDS:
-        if field.label == "Total Amount of the Report":
-            continue
         await _fill_required_text_field(page, field, record, errors)
 
     amount_to_remit = _as_string(record.get("amount_to_remit"))
@@ -183,6 +239,45 @@ async def _fill_tx_holder_info_page(page: Page, record: Dict[str, Any], errors: 
             "dropdown 'Funds Remitted Via'",
             lambda: _set_dropdown_or_accept_disabled(page, "Funds Remitted Via", funds_remitted_via),
         )
+
+
+async def _fill_date_triplet(
+    page: Page,
+    base_label: str,
+    month_value: str,
+    day_value: str,
+    year_value: str,
+    errors: list[str],
+) -> None:
+    if not any([month_value, day_value, year_value]):
+        return
+
+    print(f"TX debug -> field='{base_label}' type='DROPDOWN_TRIPLET'")
+    parts = (
+        (f"{base_label} month", month_value),
+        (f"{base_label} day", day_value),
+        (f"{base_label} year", year_value),
+    )
+    for label_text, raw_value in parts:
+        value = _normalize_date_part(raw_value)
+        if not value:
+            continue
+        await _guarded(
+            errors,
+            f"dropdown '{label_text}'",
+            lambda l=label_text, v=value: _set_dropdown_or_accept_disabled(page, l, v),
+        )
+
+
+def _normalize_date_part(value: str) -> str:
+    text = _as_string(value)
+    if not text:
+        return ""
+    if text.isdigit():
+        stripped = str(int(text))
+        if len(text) in {1, 2}:
+            return stripped
+    return text
 
 
 async def _fill_parent_company_fein(
