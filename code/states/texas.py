@@ -70,14 +70,13 @@ _PRIMARY_DROPDOWNS: tuple[_DropdownFieldSpec, ...] = (
 )
 
 _REPORT_DROPDOWNS: tuple[_DropdownFieldSpec, ...] = (
-    _DropdownFieldSpec("Report Type", "report_type", required=True),
     _DropdownFieldSpec("Report Year", "report_year", required=True),
 )
 
 _TOTAL_TEXT_FIELDS: tuple[_TextFieldSpec, ...] = (
-    _TextFieldSpec("Total Number of Items Reported", "total_items_reported", required=True),
-    _TextFieldSpec("Total Number of Safekeeping Items", "total_safekeeping_items", required=True),
-    _TextFieldSpec("Shares of Stocks or Mutual Funds Remitted", "shares_remitted", required=True),
+    _TextFieldSpec("Total Number of Items Reported", "total_items_reported", required=False),
+    _TextFieldSpec("Total Number of Safekeeping Items", "total_safekeeping_items", required=False),
+    _TextFieldSpec("Shares of Stocks or Mutual Funds Remitted", "shares_remitted", required=False),
 )
 
 _FIRST_TIME_RADIO = "Is this the first time this business entity has filed an Unclaimed Property Report?"
@@ -170,15 +169,25 @@ async def _fill_tx_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     else:
         errors.append("state is required for 'State'.")
 
+    raw_report_type = _as_string(record.get("report_type"))
+    if not raw_report_type:
+        errors.append("report_type is required for 'Report Type'.")
+    else:
+        print(f"TX debug -> raw report_type input='{raw_report_type}'")
+        normalized_report_type = _normalize_tx_report_type(raw_report_type)
+        print(f"TX debug -> normalized TX report_type='{normalized_report_type}'")
+        await _guarded(
+            errors,
+            "dropdown 'Report Type'",
+            lambda: _set_dropdown_or_accept_disabled(page, "Report Type", normalized_report_type),
+        )
+
     for field in _REPORT_DROPDOWNS:
         await _set_dropdown_with_disabled_acceptance(page, field, record, errors)
 
-    hipaa = _as_bool(record.get("includes_hipaa_records"))
-    if hipaa is None:
-        errors.append("includes_hipaa_records is required for TX filing.")
-    else:
-        print(f"TX debug -> field='{_HIPAA_RADIO}' type='RADIO'")
-        await _guarded(errors, f"radio '{_HIPAA_RADIO}'", lambda: _set_yes_no_radio_by_label(page, _HIPAA_RADIO, hipaa))
+    hipaa = _as_bool_or_default_no(record.get("includes_hipaa_records"))
+    print(f"TX debug -> field='{_HIPAA_RADIO}' type='RADIO'")
+    await _guarded(errors, f"radio '{_HIPAA_RADIO}'", lambda: _set_yes_no_radio_by_label(page, _HIPAA_RADIO, hipaa))
 
     combined_file = _as_bool(record.get("combined_file"))
     if combined_file is None:
@@ -215,8 +224,35 @@ async def _fill_tx_holder_info_page(page: Page, record: Dict[str, Any], errors: 
             lambda: _fill_text_by_label(page, "Total Amount of the Report", total_amount_of_report),
         )
 
-    for field in _TOTAL_TEXT_FIELDS:
-        await _fill_required_text_field(page, field, record, errors)
+    total_items = _as_string(record.get("total_items_reported"))
+    if not total_items:
+        print("TX debug -> total_items_reported blank; defaulting to 1")
+        total_items = "1"
+    await _guarded(
+        errors,
+        "text 'Total Number of Items Reported'",
+        lambda: _fill_text_by_label(page, "Total Number of Items Reported", total_items),
+    )
+
+    total_safekeeping = _as_string(record.get("total_safekeeping_items"))
+    if not total_safekeeping:
+        print("TX debug -> total_safekeeping_items blank; defaulting to 0")
+        total_safekeeping = "0"
+    await _guarded(
+        errors,
+        "text 'Total Number of Safekeeping Items'",
+        lambda: _fill_text_by_label(page, "Total Number of Safekeeping Items", total_safekeeping),
+    )
+
+    shares_remitted = _as_string(record.get("shares_remitted"))
+    if not shares_remitted:
+        print("TX debug -> shares_remitted blank; defaulting to 0")
+        shares_remitted = "0"
+    await _guarded(
+        errors,
+        "text 'Shares of Stocks or Mutual Funds Remitted'",
+        lambda: _fill_text_by_label(page, "Shares of Stocks or Mutual Funds Remitted", shares_remitted),
+    )
 
     amount_to_remit = _as_string(record.get("amount_to_remit"))
     if not amount_to_remit:
@@ -456,6 +492,31 @@ async def _guarded(errors: list[str], field_desc: str, action: Any) -> None:
         print(f"TX automation warning: {message}")
         errors.append(message)
 
+
+
+
+def _normalize_tx_report_type(raw_value: str) -> str:
+    mapping = {
+        "annual": "Annual Report",
+        "annual report": "Annual Report",
+        "audit": "Audit Report",
+        "audit report": "Audit Report",
+        "supplemental": "Supplemental Report",
+        "supplemental report": "Supplemental Report",
+        "reciprocal": "Reciprocal Report",
+        "reciprocal report": "Reciprocal Report",
+    }
+    normalized = _normalize(raw_value)
+    if normalized in mapping:
+        return mapping[normalized]
+    raise TexasAutomationError(f"Unsupported TX report_type value: '{raw_value}'")
+
+
+def _as_bool_or_default_no(value: Any) -> bool:
+    parsed = _as_bool(value)
+    if parsed is None:
+        return False
+    return parsed
 
 def _merge_records(holder_row: Dict[str, Any], payment_row: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(holder_row)
