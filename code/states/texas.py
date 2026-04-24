@@ -182,8 +182,11 @@ async def _fill_tx_holder_info_page(page: Page, record: Dict[str, Any], errors: 
             lambda: _set_dropdown_or_accept_disabled(page, "Report Type", normalized_report_type),
         )
 
-    for field in _REPORT_DROPDOWNS:
-        await _set_dropdown_with_disabled_acceptance(page, field, record, errors)
+    report_year = _as_string(record.get("report_year"))
+    if not report_year:
+        errors.append("report_year is required for 'Report Year'.")
+    else:
+        await _guarded(errors, "dropdown 'Report Year'", lambda: _set_tx_report_year(page, report_year))
 
     hipaa = _as_bool_or_default_no(record.get("includes_hipaa_records"))
     print(f"TX debug -> field='{_HIPAA_RADIO}' type='RADIO'")
@@ -314,6 +317,42 @@ def _normalize_date_part(value: str) -> str:
         if len(text) in {1, 2}:
             return stripped
     return text
+
+
+async def _set_tx_report_year(page: Page, expected_year: str) -> None:
+    label_text = "Report Year"
+    try:
+        row, _ = await locate_strict_row_for_label(page, label_text, "dropdown", "TX")
+    except FieldResolutionError as exc:
+        raise TexasAutomationError("TX could not locate dropdown 'Report Year'.") from exc
+
+    control = row.locator("select").first
+    enabled = await control.is_enabled()
+    current_text = _as_string(await control.evaluate("el => (el.selectedOptions[0]?.textContent || '').trim()"))
+    current_value = _as_string(await control.evaluate("el => (el.value || '').trim()"))
+
+    if enabled:
+        await _set_dropdown_or_accept_disabled(page, label_text, expected_year)
+        return
+
+    current_norm = _normalize(current_text)
+    value_norm = _normalize(current_value)
+    if (
+        current_norm
+        and current_norm not in {"select an option", "select option", "please select"}
+    ) or (
+        value_norm
+        and value_norm not in {"", "0", "-1", "select", "select an option"}
+    ):
+        print(
+            f"TX debug -> Report Year disabled; current_text='{current_text}' expected='{expected_year}'; "
+            "accepting Texas auto-selected year"
+        )
+        return
+
+    raise TexasAutomationError(
+        f"TX dropdown 'Report Year' is disabled and has no selected year. current_text='{current_text}' current_value='{current_value}'."
+    )
 
 
 async def _fill_parent_company_fein(
