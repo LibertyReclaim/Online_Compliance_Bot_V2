@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -135,7 +136,7 @@ async def _fill_statistics_fields(page: Page, record: Dict[str, Any], errors: li
     await _guarded(
         errors,
         "text 'Annual Sales/Premiums'",
-        lambda: _fill_text_by_label(page, "Annual Sales/Premiums", annual_sales),
+        lambda: _fill_currency_text_by_label(page, "Annual Sales/Premiums", annual_sales),
     )
     await _guarded(
         errors,
@@ -169,6 +170,44 @@ async def _fill_amount_fields(page: Page, record: Dict[str, Any], negative_repor
             "text 'Amount To Be Remitted'",
             lambda: _fill_text_by_label(page, "Amount To Be Remitted", amount_to_remit),
         )
+
+
+async def _fill_currency_text_by_label(page: Page, label_text: str, value: str) -> None:
+    try:
+        row, _ = await locate_strict_row_for_label(page, label_text, "text", "IL")
+    except FieldResolutionError as exc:
+        raise IllinoisAutomationError(f"IL could not locate text field '{label_text}'.") from exc
+
+    control = row.locator("input:not([type='hidden']):not([type='radio']):not([type='checkbox']), textarea").first
+    await control.fill("")
+    await control.type(value)
+    await control.blur()
+
+    actual = _as_string(await control.input_value())
+    expected_num = _parse_currency_decimal(value)
+    actual_num = _parse_currency_decimal(actual)
+
+    if expected_num is not None and actual_num is not None and expected_num == actual_num:
+        return
+
+    expected_norm = _normalize(value)
+    actual_norm = _normalize(actual)
+    if expected_norm != actual_norm:
+        raise IllinoisAutomationError(
+            f"IL currency verification failed for '{label_text}'. raw_expected='{value}' raw_actual='{actual}'."
+        )
+
+
+def _parse_currency_decimal(value: str) -> Optional[Decimal]:
+    raw = _as_string(value).replace("$", "").replace(",", "").replace(" ", "")
+    if not raw:
+        return None
+    if raw.startswith("(") and raw.endswith(")"):
+        raw = f"-{raw[1:-1]}"
+    try:
+        return Decimal(raw)
+    except (InvalidOperation, ValueError):
+        return None
 
 
 async def _set_il_report_year(page: Page, expected_year: str) -> None:
