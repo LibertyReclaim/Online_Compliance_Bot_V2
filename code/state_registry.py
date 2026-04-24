@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from states import california, connecticut, illinois, newjersey, newyork, texas
+from states import california, connecticut, illinois, newjersey, newyork, ohio, texas
 
 StateRunner = Callable[..., Any]
 
@@ -20,6 +20,7 @@ def get_state_runner(state_code: str) -> StateRunner:
         "NJ": newjersey.run,
         "TX": texas.run,
         "IL": illinois.run,
+        "OH": ohio.run,
     }
     print("Registered states:", ", ".join(registry.keys()))
 
@@ -30,4 +31,4 @@ def get_state_runner(state_code: str) -> StateRunner:
 
 
 def get_registered_states() -> list[str]:
-    return ["NY", "CA", "CT", "NJ", "TX", "IL"]
+    return ["NY", "CA", "CT", "NJ", "TX", "IL", "OH"]
