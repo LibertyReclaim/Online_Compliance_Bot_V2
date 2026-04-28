@@ -110,13 +110,10 @@ async def _fill_ma_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     if not (month_value and day_value and year_value):
         errors.append("Date of Incorporation (month/day/year) is required for MA filing.")
     else:
-        await _fill_required_date_triplet(
-            page,
-            "Date of Incorporation",
-            month_value,
-            day_value,
-            year_value,
+        await _guarded(
             errors,
+            "dropdown triplet 'Date of Incorporation'",
+            lambda: _set_date_of_incorporation_triplet(page, month_value, day_value, year_value),
         )
 
     report_type_raw = _as_string(record.get("report_type"))
@@ -181,28 +178,96 @@ async def _fill_ma_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     )
 
 
-async def _fill_required_date_triplet(
-    page: Page,
-    base_label: str,
-    month_value: str,
-    day_value: str,
-    year_value: str,
-    errors: list[str],
-) -> None:
-    parts = (
-        (f"{base_label} month", month_value),
-        (f"{base_label} day", day_value),
-        (f"{base_label} year", year_value),
+async def _set_date_of_incorporation_triplet(page: Page, month_value: str, day_value: str, year_value: str) -> None:
+    print("MA debug -> field='Date of Incorporation' type='DROPDOWN_TRIPLET'")
+
+    label_candidates = page.locator(
+        "xpath=//*[self::label or self::span or self::div or self::p or self::strong or self::b or self::td][contains(translate(normalize-space(string(.)), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ*:', 'abcdefghijklmnopqrstuvwxyz  '), 'date of incorporation')]"
     )
-    for label_text, raw_value in parts:
-        value = _normalize_date_part(raw_value)
-        await _guarded(
-            errors,
-            f"dropdown '{label_text}'",
-            lambda l=label_text, v=value: _set_dropdown_or_accept_disabled(page, l, v),
+
+    row = None
+    candidate_count = await label_candidates.count()
+    for i in range(min(candidate_count, 12)):
+        label = label_candidates.nth(i)
+        try:
+            if not await label.is_visible():
+                continue
+        except Exception:
+            continue
+
+        for xpath in [
+            "xpath=ancestor::div[1]",
+            "xpath=ancestor::*[contains(@class,'form-group')][1]",
+            "xpath=ancestor::*[contains(@class,'row')][1]",
+            "xpath=ancestor::td[1]",
+            "xpath=ancestor::tr[1]",
+            "xpath=ancestor::li[1]",
+            "xpath=ancestor::div[2]",
+            "xpath=ancestor::div[3]",
+            "xpath=ancestor::div[4]",
+        ]:
+            candidate_row = label.locator(xpath).first
+            try:
+                if await candidate_row.count() <= 0:
+                    continue
+            except Exception:
+                continue
+
+            selects = candidate_row.locator("select")
+            if await selects.count() >= 3:
+                row = candidate_row
+                break
+        if row is not None:
+            break
+
+    if row is None:
+        raise MassachusettsAutomationError("MA could not locate Date of Incorporation row with 3 dropdowns.")
+
+    selects = row.locator("select")
+    select_count = await selects.count()
+    print(f"MA debug -> found {select_count} selects in Date of Incorporation row")
+    if select_count < 3:
+        raise MassachusettsAutomationError(
+            f"MA Date of Incorporation row found but expected 3 selects; found {select_count}."
         )
-        part_name = label_text.replace(f"{base_label} ", "")
-        print(f"MA debug -> selected {base_label} {part_name}='{value}'")
+
+    parts = ((month_value, "month"), (day_value, "day"), (year_value, "year"))
+    for index, (raw_value, part_name) in enumerate(parts):
+        value = _normalize_date_part(raw_value)
+        control = selects.nth(index)
+        try:
+            await control.select_option(label=value)
+        except Exception:
+            options = await control.evaluate(
+                "el => Array.from(el.options).map(o => ({text:(o.textContent||'').trim(), value:(o.value||'').trim()}))"
+            )
+            matched_value = None
+            for option in options:
+                text_norm = _normalize(str(option.get("text", "")))
+                value_norm = _normalize(str(option.get("value", "")))
+                target_norm = _normalize(value)
+                if text_norm == target_norm or value_norm == target_norm:
+                    matched_value = str(option.get("value", ""))
+                    break
+            if matched_value is None:
+                for option in options:
+                    text_norm = _normalize(str(option.get("text", "")))
+                    target_norm = _normalize(value)
+                    if text_norm and (text_norm in target_norm or target_norm in text_norm):
+                        matched_value = str(option.get("value", ""))
+                        break
+            if matched_value is None:
+                raise MassachusettsAutomationError(
+                    f"MA could not select Date of Incorporation {part_name}='{value}'."
+                )
+            await control.select_option(value=matched_value)
+
+        selected_text = _as_string(await control.evaluate("el => (el.selectedOptions[0]?.textContent || '').trim()"))
+        if _normalize(value) not in _normalize(selected_text) and _normalize(selected_text) not in _normalize(value):
+            raise MassachusettsAutomationError(
+                f"MA Date of Incorporation {part_name} verification failed. selected='{selected_text}' expected='{value}'."
+            )
+        print(f"MA debug -> selected Date of Incorporation {part_name}='{value}'")
 
 
 async def _set_ma_state_dropdown(page: Page, expected_state: str) -> None:
