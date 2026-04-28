@@ -225,7 +225,7 @@ async def _set_date_of_incorporation_triplet(page: Page, month_value: str, day_v
 
     selects = row.locator("select")
     select_count = await selects.count()
-    print(f"MA debug -> found {select_count} selects in Date of Incorporation row")
+    print(f"MA debug -> found {select_count} dropdowns in Date of Incorporation row")
     if select_count < 3:
         raise MassachusettsAutomationError(
             f"MA Date of Incorporation row found but expected 3 selects; found {select_count}."
@@ -267,7 +267,7 @@ async def _set_date_of_incorporation_triplet(page: Page, month_value: str, day_v
             raise MassachusettsAutomationError(
                 f"MA Date of Incorporation {part_name} verification failed. selected='{selected_text}' expected='{value}'."
             )
-        print(f"MA debug -> selected Date of Incorporation {part_name}='{value}'")
+        print(f"MA debug -> selected {part_name}='{value}'")
 
 
 async def _set_ma_state_dropdown(page: Page, expected_state: str) -> None:
