@@ -181,93 +181,131 @@ async def _fill_ma_holder_info_page(page: Page, record: Dict[str, Any], errors: 
 async def _set_date_of_incorporation_triplet(page: Page, month_value: str, day_value: str, year_value: str) -> None:
     print("MA debug -> field='Date of Incorporation' type='DROPDOWN_TRIPLET'")
 
-    label_candidates = page.locator(
-        "xpath=//*[self::label or self::span or self::div or self::p or self::strong or self::b or self::td][contains(translate(normalize-space(string(.)), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ*:', 'abcdefghijklmnopqrstuvwxyz  '), 'date of incorporation')]"
-    )
+    selects = page.locator("select:visible")
+    total_visible = await selects.count()
 
-    row = None
-    candidate_count = await label_candidates.count()
-    for i in range(min(candidate_count, 12)):
-        label = label_candidates.nth(i)
+    month_select = None
+    day_select = None
+    year_select = None
+
+    for i in range(max(0, total_visible - 2)):
+        s1 = selects.nth(i)
+        s2 = selects.nth(i + 1)
+        s3 = selects.nth(i + 2)
+
+        if not await _is_date_of_incorporation_context(s1):
+            continue
+
+        k1 = await _classify_date_select(s1)
+        k2 = await _classify_date_select(s2)
+        k3 = await _classify_date_select(s3)
+        if (k1, k2, k3) == ("month", "day", "year"):
+            month_select, day_select, year_select = s1, s2, s3
+            break
+
+    if month_select is None or day_select is None or year_select is None:
+        raise MassachusettsAutomationError(
+            "MA could not locate Date of Incorporation MM/DD/YYYY dropdown triplet."
+        )
+
+    print("MA debug -> Date of Incorporation visible date selects found: 3")
+
+    await _select_date_part(month_select, _normalize_date_part(month_value), "month")
+    await _select_date_part(day_select, _normalize_date_part(day_value), "day")
+    await _select_date_part(year_select, _normalize_date_part(year_value), "year")
+
+
+async def _is_date_of_incorporation_context(select_locator: Any) -> bool:
+    try:
+        return bool(
+            await select_locator.evaluate(
+                """
+                (el) => {
+                    let node = el;
+                    for (let i = 0; i < 8 && node; i += 1) {
+                        const text = (node.textContent || '').replace(/\s+/g, ' ').toLowerCase();
+                        if (text.includes('date of incorporation')) return true;
+                        node = node.parentElement;
+                    }
+                    return false;
+                }
+                """
+            )
+        )
+    except Exception:
+        return False
+
+
+async def _classify_date_select(select_locator: Any) -> str:
+    try:
+        options = await select_locator.evaluate(
+            "el => Array.from(el.options).map(o => (o.textContent || '').trim().toLowerCase())"
+        )
+    except Exception:
+        return "other"
+
+    sample = " | ".join(options)
+
+    if "mm" in sample or any(m in sample for m in ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"]):
+        return "month"
+    if "dd" in sample or ("31" in sample and "1" in sample):
+        return "day"
+    if "yyyy" in sample or any(str(y) in sample for y in range(1990, 2101)):
+        return "year"
+    return "other"
+
+
+async def _select_date_part(select_locator: Any, value: str, part_name: str) -> None:
+    candidates = [value]
+    if part_name == "month":
+        month_names = {
+            "1": "January", "2": "February", "3": "March", "4": "April", "5": "May", "6": "June",
+            "7": "July", "8": "August", "9": "September", "10": "October", "11": "November", "12": "December",
+        }
+        plain = str(int(value)) if value.isdigit() else value
+        candidates = [value, plain, month_names.get(plain, "")]
+
+    for candidate in [c for c in candidates if c]:
         try:
-            if not await label.is_visible():
-                continue
+            await select_locator.select_option(label=candidate)
+            actual = _as_string(await select_locator.evaluate("el => (el.value || '').trim()"))
+            print(f"MA debug -> Date of Incorporation {part_name} selected actual='{actual}'")
+            return
         except Exception:
             continue
 
-        for xpath in [
-            "xpath=ancestor::div[1]",
-            "xpath=ancestor::*[contains(@class,'form-group')][1]",
-            "xpath=ancestor::*[contains(@class,'row')][1]",
-            "xpath=ancestor::td[1]",
-            "xpath=ancestor::tr[1]",
-            "xpath=ancestor::li[1]",
-            "xpath=ancestor::div[2]",
-            "xpath=ancestor::div[3]",
-            "xpath=ancestor::div[4]",
-        ]:
-            candidate_row = label.locator(xpath).first
-            try:
-                if await candidate_row.count() <= 0:
-                    continue
-            except Exception:
-                continue
+    options = await select_locator.evaluate(
+        "el => Array.from(el.options).map(o => ({text:(o.textContent||'').trim(), value:(o.value||'').trim()}))"
+    )
+    target_norms = {_normalize(c) for c in candidates if c}
 
-            selects = candidate_row.locator("select")
-            if await selects.count() >= 3:
-                row = candidate_row
-                break
-        if row is not None:
+    matched_value = None
+    for option in options:
+        text_norm = _normalize(str(option.get("text", "")))
+        value_norm = _normalize(str(option.get("value", "")))
+        if text_norm in target_norms or value_norm in target_norms:
+            matched_value = str(option.get("value", ""))
             break
 
-    if row is None:
-        raise MassachusettsAutomationError("MA could not locate Date of Incorporation row with 3 dropdowns.")
+    if matched_value is None and part_name == "month":
+        month_norms = {
+            "january": "1", "february": "2", "march": "3", "april": "4", "may": "5", "june": "6",
+            "july": "7", "august": "8", "september": "9", "october": "10", "november": "11", "december": "12",
+        }
+        desired = str(int(value)) if value.isdigit() else value
+        for option in options:
+            text_norm = _normalize(str(option.get("text", "")))
+            mapped = month_norms.get(text_norm)
+            if mapped == desired:
+                matched_value = str(option.get("value", ""))
+                break
 
-    selects = row.locator("select")
-    select_count = await selects.count()
-    print(f"MA debug -> found {select_count} dropdowns in Date of Incorporation row")
-    if select_count < 3:
-        raise MassachusettsAutomationError(
-            f"MA Date of Incorporation row found but expected 3 selects; found {select_count}."
-        )
+    if matched_value is None:
+        raise MassachusettsAutomationError(f"MA could not select Date of Incorporation {part_name}='{value}'.")
 
-    parts = ((month_value, "month"), (day_value, "day"), (year_value, "year"))
-    for index, (raw_value, part_name) in enumerate(parts):
-        value = _normalize_date_part(raw_value)
-        control = selects.nth(index)
-        try:
-            await control.select_option(label=value)
-        except Exception:
-            options = await control.evaluate(
-                "el => Array.from(el.options).map(o => ({text:(o.textContent||'').trim(), value:(o.value||'').trim()}))"
-            )
-            matched_value = None
-            for option in options:
-                text_norm = _normalize(str(option.get("text", "")))
-                value_norm = _normalize(str(option.get("value", "")))
-                target_norm = _normalize(value)
-                if text_norm == target_norm or value_norm == target_norm:
-                    matched_value = str(option.get("value", ""))
-                    break
-            if matched_value is None:
-                for option in options:
-                    text_norm = _normalize(str(option.get("text", "")))
-                    target_norm = _normalize(value)
-                    if text_norm and (text_norm in target_norm or target_norm in text_norm):
-                        matched_value = str(option.get("value", ""))
-                        break
-            if matched_value is None:
-                raise MassachusettsAutomationError(
-                    f"MA could not select Date of Incorporation {part_name}='{value}'."
-                )
-            await control.select_option(value=matched_value)
-
-        selected_text = _as_string(await control.evaluate("el => (el.selectedOptions[0]?.textContent || '').trim()"))
-        if _normalize(value) not in _normalize(selected_text) and _normalize(selected_text) not in _normalize(value):
-            raise MassachusettsAutomationError(
-                f"MA Date of Incorporation {part_name} verification failed. selected='{selected_text}' expected='{value}'."
-            )
-        print(f"MA debug -> selected {part_name}='{value}'")
+    await select_locator.select_option(value=matched_value)
+    actual = _as_string(await select_locator.evaluate("el => (el.value || '').trim()"))
+    print(f"MA debug -> Date of Incorporation {part_name} selected actual='{actual}'")
 
 
 async def _set_ma_state_dropdown(page: Page, expected_state: str) -> None:
