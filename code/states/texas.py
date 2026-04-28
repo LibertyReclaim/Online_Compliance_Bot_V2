@@ -301,11 +301,7 @@ async def _fill_date_triplet(
         value = _normalize_date_part(raw_value)
         if not value:
             continue
-        await _guarded(
-            errors,
-            f"dropdown '{label_text}'",
-            lambda l=label_text, v=value: _set_dropdown_or_accept_disabled(page, l, v),
-        )
+        await _set_optional_date_dropdown_part(page, base_label, label_text, value)
 
 
 def _normalize_date_part(value: str) -> str:
@@ -353,6 +349,14 @@ async def _set_tx_report_year(page: Page, expected_year: str) -> None:
     raise TexasAutomationError(
         f"TX dropdown 'Report Year' is disabled and has no selected year. current_text='{current_text}' current_value='{current_value}'."
     )
+
+
+async def _set_optional_date_dropdown_part(page: Page, base_label: str, label_text: str, value: str) -> None:
+    part_name = label_text.replace(f"{base_label} ", "")
+    try:
+        await _set_dropdown_or_accept_disabled(page, label_text, value)
+    except Exception:
+        print(f"TX debug -> optional {base_label} {part_name} dropdown not found; skipping")
 
 
 async def _fill_parent_company_fein(
