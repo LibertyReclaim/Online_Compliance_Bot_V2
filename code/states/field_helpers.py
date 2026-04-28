@@ -421,3 +421,35 @@ async def wait_for_field_enabled(
         await asyncio.sleep(0.25)
 
     raise FieldResolutionError(f"{state_tag} field '{label_text}' stayed disabled.")
+
+
+async def wait_for_holder_form_ready(page: Page, state_code: str, timeout_ms: int = 30_000) -> None:
+    state = str(state_code).strip().upper() or "STATE"
+    print(f"{state} debug -> waiting for holder form ready")
+
+    await page.wait_for_load_state("domcontentloaded")
+    try:
+        await page.wait_for_load_state("networkidle", timeout=timeout_ms)
+    except Exception:
+        # Some portals never become fully idle; proceed to selector-based readiness checks.
+        pass
+
+    await page.wait_for_selector("input, select, textarea", timeout=timeout_ms)
+
+    required_labels = ("Holder Name", "Holder Tax ID", "Contact Name", "Email", "Report Type")
+    deadline = asyncio.get_running_loop().time() + (timeout_ms / 1000)
+
+    while asyncio.get_running_loop().time() < deadline:
+        for label in required_labels:
+            candidate = page.get_by_text(label, exact=False)
+            try:
+                if await candidate.first.is_visible(timeout=250):
+                    print(f"{state} debug -> holder form ready; starting fill")
+                    return
+            except Exception:
+                continue
+        await asyncio.sleep(0.2)
+
+    raise FieldResolutionError(
+        f"{state} holder form not ready: none of required labels were visible ({', '.join(required_labels)})."
+    )

@@ -8,11 +8,12 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from playwright.async_api import Page, async_playwright
+from playwright.async_api import Browser, Page, async_playwright
 
 from excel_loader import load_holder_records, load_payment_records
 from path_utils import build_naupa_path
 from state_registry import get_registered_states, get_state_runner
+from states.field_helpers import wait_for_holder_form_ready
 
 
 def _project_root() -> Path:
@@ -39,6 +40,27 @@ def _is_negative_report(amount_to_remit: Any) -> bool:
         return False
 
 
+
+
+def _wrap_page_goto_for_readiness(page: Page, state_code: str) -> None:
+    original_goto = page.goto
+
+    async def _goto_with_readiness(*args: Any, **kwargs: Any) -> Any:
+        result = await original_goto(*args, **kwargs)
+        target_url = ""
+        if args:
+            target_url = str(args[0] or "")
+        elif "url" in kwargs:
+            target_url = str(kwargs.get("url") or "")
+
+        if "/holder-info" in target_url:
+            await wait_for_holder_form_ready(page, state_code)
+
+        return result
+
+    page.goto = _goto_with_readiness  # type: ignore[assignment]
+
+
 async def _run_state_task(page: Page, holder: dict[str, Any], payment: dict[str, Any], naupa_path: Path) -> None:
     state_code = str(payment.get("state_code", "")).strip().upper()
     payment_id = payment.get("payment_id")
@@ -54,6 +76,7 @@ async def _run_state_task(page: Page, holder: dict[str, Any], payment: dict[str,
         if state_code == "CA":
             print("Starting CA navigation...")
 
+        _wrap_page_goto_for_readiness(page, state_code)
         result = runner(page=page, holder_row=holder, payment_row=payment, naupa_file_path=naupa_path)
 
         if inspect.isawaitable(result):
@@ -66,6 +89,20 @@ async def _run_state_task(page: Page, holder: dict[str, Any], payment: dict[str,
         print(f"\n=== AUTOMATION ERROR ({state_code}) ===")
         print(traceback.format_exc())
         print("Automation failed for this state tab. Browser will remain open so you can manually inspect the page.")
+
+
+
+
+async def _run_payment_task(
+    browser: Browser,
+    semaphore: asyncio.Semaphore,
+    holder: dict[str, Any],
+    payment: dict[str, Any],
+    naupa_path: Path,
+) -> None:
+    async with semaphore:
+        page = await browser.new_page()
+        await _run_state_task(page, holder, payment, naupa_path)
 
 
 async def run() -> None:
@@ -81,6 +118,7 @@ async def run() -> None:
         browser = await p.chromium.launch(headless=False)
 
         tasks: list[asyncio.Task[None]] = []
+        semaphore = asyncio.Semaphore(3)
 
         for payment in payment_records:
             state_code = str(payment.get("state_code", "")).strip().upper()
@@ -117,8 +155,9 @@ async def run() -> None:
                 f"internal_id={internal_id} report={report_kind} naupa='{naupa_path}'"
             )
 
-            page = await browser.new_page()
-            tasks.append(asyncio.create_task(_run_state_task(page, holder, payment, naupa_path)))
+            tasks.append(
+                asyncio.create_task(_run_payment_task(browser, semaphore, holder, payment, naupa_path))
+            )
 
         if tasks:
             await asyncio.gather(*tasks)
