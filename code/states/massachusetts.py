@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -105,14 +106,18 @@ async def _fill_ma_holder_info_page(page: Page, record: Dict[str, Any], errors: 
             lambda: _set_dropdown_or_accept_disabled(page, "State of Incorporation", state_of_incorp),
         )
 
-    await _fill_date_triplet(
-        page,
-        "Date of Incorporation",
-        _as_string(record.get("date_of_incorporation_month")) or _as_string(record.get("date_of_incorporation")),
-        _as_string(record.get("date_of_incorporation_day")),
-        _as_string(record.get("date_of_incorporation_year")),
-        errors,
-    )
+    month_value, day_value, year_value = _extract_date_of_incorporation_parts(record)
+    if not (month_value and day_value and year_value):
+        errors.append("Date of Incorporation (month/day/year) is required for MA filing.")
+    else:
+        await _fill_required_date_triplet(
+            page,
+            "Date of Incorporation",
+            month_value,
+            day_value,
+            year_value,
+            errors,
+        )
 
     report_type_raw = _as_string(record.get("report_type"))
     if not report_type_raw:
@@ -176,7 +181,7 @@ async def _fill_ma_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     )
 
 
-async def _fill_date_triplet(
+async def _fill_required_date_triplet(
     page: Page,
     base_label: str,
     month_value: str,
@@ -184,9 +189,6 @@ async def _fill_date_triplet(
     year_value: str,
     errors: list[str],
 ) -> None:
-    if not any([month_value, day_value, year_value]):
-        return
-
     parts = (
         (f"{base_label} month", month_value),
         (f"{base_label} day", day_value),
@@ -194,17 +196,13 @@ async def _fill_date_triplet(
     )
     for label_text, raw_value in parts:
         value = _normalize_date_part(raw_value)
-        if not value:
-            continue
-        await _set_optional_date_dropdown_part(page, base_label, label_text, value)
-
-
-async def _set_optional_date_dropdown_part(page: Page, base_label: str, label_text: str, value: str) -> None:
-    part_name = label_text.replace(f"{base_label} ", "")
-    try:
-        await _set_dropdown_or_accept_disabled(page, label_text, value)
-    except Exception:
-        print(f"MA debug -> optional {base_label} {part_name} dropdown not found; skipping")
+        await _guarded(
+            errors,
+            f"dropdown '{label_text}'",
+            lambda l=label_text, v=value: _set_dropdown_or_accept_disabled(page, l, v),
+        )
+        part_name = label_text.replace(f"{base_label} ", "")
+        print(f"MA debug -> selected {base_label} {part_name}='{value}'")
 
 
 async def _set_ma_state_dropdown(page: Page, expected_state: str) -> None:
@@ -354,6 +352,46 @@ def _normalize_ma_report_type(raw_value: str) -> str:
     if normalized in mapping:
         return mapping[normalized]
     return raw_value
+
+
+def _extract_date_of_incorporation_parts(record: Dict[str, Any]) -> tuple[str, str, str]:
+    raw_date = _as_string(record.get("date_of_incorporation"))
+    if raw_date:
+        parsed = _try_parse_date(raw_date)
+        if parsed is not None:
+            month, day, year = parsed
+            print(
+                f"MA debug -> parsed date_of_incorporation='{raw_date}' into month='{month}' day='{day}' year='{year}'"
+            )
+            return month, day, year
+
+    month = _as_string(record.get("date_of_incorporation_month"))
+    day = _as_string(record.get("date_of_incorporation_day"))
+    year = _as_string(record.get("date_of_incorporation_year"))
+    return month, day, year
+
+
+def _try_parse_date(value: str) -> Optional[tuple[str, str, str]]:
+    text = _as_string(value)
+    if not text:
+        return None
+
+    known_formats = ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d", "%Y/%m/%d")
+    for fmt in known_formats:
+        try:
+            parsed = datetime.strptime(text, fmt)
+            return str(parsed.month), str(parsed.day), str(parsed.year)
+        except ValueError:
+            continue
+
+    if text.isdigit() and len(text) == 8:
+        # MMDDYYYY
+        month = str(int(text[:2]))
+        day = str(int(text[2:4]))
+        year = text[4:]
+        return month, day, year
+
+    return None
 
 
 def _normalize_date_part(value: str) -> str:
