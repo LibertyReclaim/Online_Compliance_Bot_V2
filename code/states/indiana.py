@@ -55,6 +55,9 @@ async def run(
     print(f"IN debug -> navigating to {IN_HOLDER_INFO_URL}")
     await page.goto(IN_HOLDER_INFO_URL, wait_until="domcontentloaded")
     await page.wait_for_timeout(wait_after_navigation_ms)
+    print(f"IN debug -> after goto url='{page.url}'")
+
+    await _ensure_indiana_holder_info_url(page)
     await _wait_for_indiana_holder_form_ready(page)
 
     errors: list[str] = []
@@ -71,6 +74,29 @@ async def run(
 
 
 
+
+
+async def _ensure_indiana_holder_info_url(page: Page) -> None:
+    if "/app/holder-info" in page.url:
+        return
+
+    await page.goto("https://www.indianaunclaimed.gov/app/holder-info", wait_until="networkidle")
+    print(f"IN debug -> forced holder-info url='{page.url}'")
+    if "/app/holder-info" in page.url:
+        return
+
+    fallbacks = (
+        "https://indianaunclaimed.gov/app/holder-info/",
+        "https://www.indianaunclaimed.gov/app/holder-info/",
+    )
+    for url in fallbacks:
+        await page.goto(url, wait_until="networkidle")
+        print(f"IN debug -> forced holder-info url='{page.url}'")
+        if "/app/holder-info" in page.url:
+            return
+
+    raise IndianaAutomationError(f"Indiana holder-info form did not load; final url={page.url}")
+
 async def _wait_for_indiana_holder_form_ready(page: Page) -> None:
     await page.wait_for_load_state("domcontentloaded")
     try:
@@ -79,8 +105,8 @@ async def _wait_for_indiana_holder_form_ready(page: Page) -> None:
         pass
 
     await page.wait_for_selector("text=Enter Holder Information", timeout=30_000)
-    await page.wait_for_selector("label:has-text('Holder Name'), text=Holder Name", timeout=30_000)
-    await page.wait_for_selector("input:visible, select:visible, textarea:visible", timeout=30_000)
+    await page.wait_for_selector("text=Holder FEIN", timeout=30_000)
+    await page.wait_for_selector("input:not(#chat):visible, select:visible, textarea:visible", timeout=30_000)
     print("IN debug -> holder form ready; starting fill")
 
 async def _fill_in_holder_info_page(page: Page, record: Dict[str, Any], errors: list[str]) -> None:
