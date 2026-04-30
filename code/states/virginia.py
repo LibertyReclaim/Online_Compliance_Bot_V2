@@ -95,16 +95,12 @@ async def _fill_va_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     if negative:
         return
 
-    due_date = _as_string(record.get("due_diligence_date")) or "01/01/2026"
-    month, day, year = _parse_date_triplet(due_date)
-    if not (month and day and year):
-        errors.append("due_diligence_date is required and must be parseable for VA.")
-    else:
-        print(f"VA debug -> field='Due-diligence Date' parsed='{month.zfill(2)}/{day.zfill(2)}/{year}'")
-        await _guarded(errors, "dropdown '#dueDiligenceDate-month'", lambda: _set_due_diligence_part(page, "#dueDiligenceDate-month", month))
-        await _guarded(errors, "dropdown '#dueDiligenceDate-day'", lambda: _set_due_diligence_part(page, "#dueDiligenceDate-day", day))
-        await _guarded(errors, "dropdown '#dueDiligenceDate-year'", lambda: _set_due_diligence_part(page, "#dueDiligenceDate-year", year))
-        print(f"VA debug -> selected MM='{month}' DD='{day}' YYYY='{year}'")
+    month, day, year, source = _resolve_due_diligence_parts(record)
+    print(f"VA debug -> due diligence source='{source}'")
+    await _guarded(errors, "dropdown '#dueDiligenceDate-month'", lambda: _set_due_diligence_part(page, "#dueDiligenceDate-month", month))
+    await _guarded(errors, "dropdown '#dueDiligenceDate-day'", lambda: _set_due_diligence_part(page, "#dueDiligenceDate-day", day))
+    await _guarded(errors, "dropdown '#dueDiligenceDate-year'", lambda: _set_due_diligence_part(page, "#dueDiligenceDate-year", year))
+    print(f"VA debug -> selected MM='{month}' DD='{day}' YYYY='{year}'")
 
     amount = _as_string(record.get("amount_to_remit"))
     if not amount:
@@ -242,6 +238,28 @@ def _parse_date_triplet(date_text: str) -> tuple[str, str, str]:
                 dd = str(int(dd)) if dd.isdigit() else dd
                 return mm, dd, yyyy
     return "", "", ""
+
+
+def _resolve_due_diligence_parts(record: Dict[str, Any]) -> tuple[str, str, str, str]:
+    mm = _as_string(record.get("due_diligance_month"))
+    dd = _as_string(record.get("due_diligance_day"))
+    yyyy = _as_string(record.get("due_diligance_year"))
+    if mm and dd and yyyy:
+        return mm, dd, yyyy, "split misspelled columns"
+
+    mm = _as_string(record.get("due_diligence_month"))
+    dd = _as_string(record.get("due_diligence_day"))
+    yyyy = _as_string(record.get("due_diligence_year"))
+    if mm and dd and yyyy:
+        return mm, dd, yyyy, "split corrected columns"
+
+    due_date = _as_string(record.get("due_diligence_date"))
+    if due_date:
+        month, day, year = _parse_date_triplet(due_date)
+        if month and day and year:
+            return month, day, year, "single due_diligence_date"
+
+    return "01", "01", "2026", "default 01/01/2026"
 
 
 def _normalize_funds(raw_value: str) -> str:
