@@ -190,13 +190,72 @@ async def _upload_naupa_file(page: Page, file_path: Path) -> None:
                 continue
             try:
                 await locator.first.set_input_files(str(file_path))
-                await page.wait_for_timeout(1000)
+                await page.wait_for_timeout(1500)
+                print("VA debug -> NAUPA uploaded; clicking upload-page Next")
+                await _click_upload_page_next(page, locator.first)
+                await _wait_for_preview_or_signature(page)
+                print("VA debug -> reached holder-preview; waiting for manual signature")
+                print("VA finished - waiting for manual signature")
                 return
             except Exception:
                 continue
         await page.wait_for_timeout(800)
 
     raise VirginiaAutomationError("Could not find VA upload file input.")
+
+
+async def _click_upload_page_next(page: Page, upload_input: Any) -> None:
+    next_candidates: list[Any] = []
+
+    role_next = page.get_by_role("button", name="next")
+    fallback_next = page.locator("button:has-text('NEXT')")
+
+    for candidate in (role_next, fallback_next):
+        count = await candidate.count()
+        for i in range(count):
+            btn = candidate.nth(i)
+            if not await btn.is_visible():
+                continue
+            if not await btn.is_enabled():
+                continue
+            next_candidates.append(btn)
+
+    if not next_candidates:
+        raise VirginiaAutomationError("Could not find enabled visible upload-page NEXT button.")
+
+    upload_box = await upload_input.bounding_box()
+    if upload_box is not None:
+        upload_center_y = float(upload_box["y"]) + float(upload_box["height"]) / 2.0
+        best_btn = None
+        best_distance = None
+        for btn in next_candidates:
+            btn_box = await btn.bounding_box()
+            if btn_box is None:
+                continue
+            btn_center_y = float(btn_box["y"]) + float(btn_box["height"]) / 2.0
+            distance = abs(btn_center_y - upload_center_y)
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                best_btn = btn
+        if best_btn is not None:
+            await best_btn.click(timeout=10_000)
+            return
+
+    await next_candidates[-1].click(timeout=10_000)
+
+
+async def _wait_for_preview_or_signature(page: Page) -> None:
+    try:
+        await page.wait_for_url("**/app/holder-preview**", timeout=20_000)
+        return
+    except PlaywrightTimeoutError:
+        pass
+
+    signature_text = page.get_by_text("Electronic Signature Required")
+    if await signature_text.first.count() > 0 and await signature_text.first.is_visible():
+        return
+
+    raise VirginiaAutomationError("VA upload did not reach holder-preview or signature prompt.")
 
 
 async def _click_next(page: Page) -> None:
