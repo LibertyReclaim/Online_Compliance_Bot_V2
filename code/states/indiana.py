@@ -10,7 +10,7 @@ from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
 from states.field_helpers import FieldResolutionError, fill_text_field, locate_strict_row_for_label, select_dropdown_field, set_radio_field
 
-IN_HOLDER_INFO_URL = "https://indianaunclaimed.gov/app/holder-info"
+IN_HOLDER_INFO_URL = "https://www.indianaunclaimed.gov/app/holder-info"
 
 
 class IndianaAutomationError(RuntimeError):
@@ -52,8 +52,10 @@ async def run(
     record = _merge_records(holder_row, payment_row)
     naupa_path = Path(naupa_file_path).expanduser().resolve()
 
+    print(f"IN debug -> navigating to {IN_HOLDER_INFO_URL}")
     await page.goto(IN_HOLDER_INFO_URL, wait_until="domcontentloaded")
     await page.wait_for_timeout(wait_after_navigation_ms)
+    await _wait_for_indiana_holder_form_ready(page)
 
     errors: list[str] = []
     await _fill_in_holder_info_page(page, record, errors)
@@ -66,6 +68,20 @@ async def run(
     await _upload_naupa_file(page, naupa_path)
     await _click_next(page)
 
+
+
+
+async def _wait_for_indiana_holder_form_ready(page: Page) -> None:
+    await page.wait_for_load_state("domcontentloaded")
+    try:
+        await page.wait_for_load_state("networkidle", timeout=30_000)
+    except Exception:
+        pass
+
+    await page.wait_for_selector("text=Enter Holder Information", timeout=30_000)
+    await page.wait_for_selector("label:has-text('Holder Name'), text=Holder Name", timeout=30_000)
+    await page.wait_for_selector("input:visible, select:visible, textarea:visible", timeout=30_000)
+    print("IN debug -> holder form ready; starting fill")
 
 async def _fill_in_holder_info_page(page: Page, record: Dict[str, Any], errors: list[str]) -> None:
     for field in _TEXT_FIELDS:
