@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
-from states.field_helpers import fill_text_field, select_dropdown_field, set_radio_field
+from states.field_helpers import fill_text_field, locate_strict_row_for_label, select_dropdown_field, set_radio_field
 
 VA_HOLDER_INFO_URL = "https://vamoneysearch.gov/app/holder-info"
 
@@ -74,7 +74,7 @@ async def _fill_va_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     if not report_type:
         errors.append("report_type is required for 'Report Type'.")
     else:
-        await _guarded(errors, "dropdown 'Report Type'", lambda: select_dropdown_field(page, "Report Type", report_type, "VA"))
+        await _guarded(errors, "dropdown 'Report Type'", lambda: _set_or_accept_report_type(page, report_type))
 
     report_year = _as_string(record.get("report_year"))
     if not report_year:
@@ -119,6 +119,29 @@ async def _fill_va_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     else:
         normalized = _normalize_funds(funds)
         await _guarded(errors, "dropdown 'Funds Remitted Via'", lambda: select_dropdown_field(page, "Funds Remitted Via", normalized, "VA"))
+
+
+async def _set_or_accept_report_type(page: Page, expected: str) -> None:
+    row, _ = await locate_strict_row_for_label(page, "Report Type", "dropdown", "VA")
+    control = row.locator("select").first
+
+    expected_norm = _normalize(expected)
+    current_text = _as_string(await control.evaluate("el => (el.selectedOptions[0]?.textContent || '').trim()"))
+    current_value = _as_string(await control.evaluate("el => (el.value || '').trim()"))
+
+    if _normalize(current_text) == expected_norm or _normalize(current_value) == expected_norm:
+        print(f"VA debug -> Report Type already selected as {expected}; accepting")
+        return
+
+    try:
+        await control.select_option(label=expected)
+    except Exception as exc:
+        latest_text = _as_string(await control.evaluate("el => (el.selectedOptions[0]?.textContent || '').trim()"))
+        latest_value = _as_string(await control.evaluate("el => (el.value || '').trim()"))
+        if _normalize(latest_text) == expected_norm or _normalize(latest_value) == expected_norm:
+            print(f"VA debug -> Report Type already selected as {expected}; accepting")
+            return
+        raise VirginiaAutomationError(f"VA failed selecting Report Type '{expected}'.") from exc
 
 
 async def _set_due_diligence_part(page: Page, selector: str, value: str) -> None:
