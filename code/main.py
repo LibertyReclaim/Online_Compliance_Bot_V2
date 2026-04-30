@@ -76,7 +76,11 @@ async def _run_state_task(page: Page, holder: dict[str, Any], payment: dict[str,
         if state_code == "CA":
             print("Starting CA navigation...")
 
-        _wrap_page_goto_for_readiness(page, state_code)
+        if state_code == "IN":
+            print("IN debug -> using Indiana custom navigation; skipping generic readiness wrapper")
+        else:
+            _wrap_page_goto_for_readiness(page, state_code)
+
         result = runner(page=page, holder_row=holder, payment_row=payment, naupa_file_path=naupa_path)
 
         if inspect.isawaitable(result):
