@@ -7,6 +7,7 @@ from typing import Any
 
 from states import california, connecticut, illinois, massachusetts, michigan, newjersey, newyork, ohio, texas
 import states.indiana as indiana
+import states.virginia as virginia
 
 StateRunner = Callable[..., Any]
 
@@ -25,6 +26,7 @@ def get_state_runner(state_code: str) -> StateRunner:
         "MI": michigan.run,
         "MA": massachusetts.run,
         "IN": indiana.run,
+        "VA": virginia.run,
     }
     print("Registered states:", ", ".join(registry.keys()))
 
@@ -35,4 +37,4 @@ def get_state_runner(state_code: str) -> StateRunner:
 
 
 def get_registered_states() -> list[str]:
-    return ["NY", "CA", "CT", "NJ", "TX", "IL", "OH", "MI", "MA", "IN"]
+    return ["NY", "CA", "CT", "NJ", "TX", "IL", "OH", "MI", "MA", "IN", "VA"]
