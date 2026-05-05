@@ -107,11 +107,15 @@ async def _fill_de_holder_info_page(page: Page, record: Dict[str, Any], errors: 
         print("DE debug -> field='State of Incorporation' mapped_from='state_incorporation/state_of_incorporation'")
         await _guarded(errors, "dropdown 'State of Incorporation'", lambda: select_dropdown_field(page, "State of Incorporation", state_incorp, "DE"))
 
-    mm, dd, yyyy = _resolve_incorporation_date(record)
-    print(f"DE debug -> field='Date of Incorporation' parsed='{mm.zfill(2)}/{dd.zfill(2)}/{yyyy}'")
-    await _guarded(errors, "dropdown '#dateOfIncorporation-month'", lambda: _set_date_part(page, "#dateOfIncorporation-month", mm))
-    await _guarded(errors, "dropdown '#dateOfIncorporation-day'", lambda: _set_date_part(page, "#dateOfIncorporation-day", dd))
-    await _guarded(errors, "dropdown '#dateOfIncorporation-year'", lambda: _set_date_part(page, "#dateOfIncorporation-year", yyyy))
+    mm, dd, yyyy = _resolve_incorporation_date_parts(record)
+    if mm and dd and yyyy:
+        print(f"DE debug -> Date of Incorporation split columns MM='{mm}' DD='{dd}' YYYY='{yyyy}'")
+        await _guarded(errors, "dropdown '#dateOfIncorporation-month'", lambda: _set_date_part(page, "#dateOfIncorporation-month", mm))
+        await _guarded(errors, "dropdown '#dateOfIncorporation-day'", lambda: _set_date_part(page, "#dateOfIncorporation-day", dd))
+        await _guarded(errors, "dropdown '#dateOfIncorporation-year'", lambda: _set_date_part(page, "#dateOfIncorporation-year", yyyy))
+        print(f"DE debug -> selected Date of Incorporation MM='{mm}' DD='{dd}' YYYY='{yyyy}'")
+    else:
+        print("DE debug -> Date of Incorporation split columns missing; leaving blank (optional unless required by site)")
 
     report_type = _normalize_report_type(_as_string(record.get("report_type")))
     if not report_type:
@@ -166,18 +170,19 @@ async def _fill_de_holder_info_page(page: Page, record: Dict[str, Any], errors: 
 
 async def _set_date_part(page: Page, selector: str, value: str) -> None:
     locator = page.locator(selector).first
-    await locator.select_option(value=value)
+    try:
+        await locator.select_option(value=value)
+        return
+    except Exception:
+        pass
+    await locator.select_option(label=value)
 
 
-def _resolve_incorporation_date(record: Dict[str, Any]) -> tuple[str, str, str]:
-    raw = _as_string(record.get("date_of_incorporation")) or "01/01/2026"
-    for sep in ["/", "-"]:
-        if sep in raw:
-            parts = [p.strip() for p in raw.split(sep)]
-            if len(parts) == 3:
-                mm, dd, yyyy = parts
-                return str(int(mm)) if mm.isdigit() else mm, str(int(dd)) if dd.isdigit() else dd, yyyy
-    return "01", "01", "2026"
+def _resolve_incorporation_date_parts(record: Dict[str, Any]) -> tuple[str, str, str]:
+    mm = _as_string(record.get("date_of_incorporation_month"))
+    dd = _as_string(record.get("date_of_incorporation_day"))
+    yyyy = _as_string(record.get("date_of_incorporation_year"))
+    return mm, dd, yyyy
 
 
 async def _upload_naupa_file(page: Page, file_path: Path) -> None:
