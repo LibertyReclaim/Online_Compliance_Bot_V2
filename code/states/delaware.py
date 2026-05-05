@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
-from states.field_helpers import fill_text_field, select_dropdown_field, set_radio_field
+from states.field_helpers import fill_text_field, locate_strict_row_for_label, select_dropdown_field, set_radio_field
 
 DE_HOLDER_INFO_URL = "https://unclaimedproperty.delaware.gov/app/holder-info"
 
@@ -110,9 +110,7 @@ async def _fill_de_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     mm, dd, yyyy = _resolve_incorporation_date_parts(record)
     if mm and dd and yyyy:
         print(f"DE debug -> Date of Incorporation split columns MM='{mm}' DD='{dd}' YYYY='{yyyy}'")
-        await _guarded(errors, "dropdown '#dateOfIncorporation-month'", lambda: _set_date_part(page, "#dateOfIncorporation-month", mm))
-        await _guarded(errors, "dropdown '#dateOfIncorporation-day'", lambda: _set_date_part(page, "#dateOfIncorporation-day", dd))
-        await _guarded(errors, "dropdown '#dateOfIncorporation-year'", lambda: _set_date_part(page, "#dateOfIncorporation-year", yyyy))
+        await _guarded(errors, "dropdown 'Date of Incorporation MM/DD/YYYY'", lambda: _set_incorporation_date_parts(page, mm, dd, yyyy))
         print(f"DE debug -> selected Date of Incorporation MM='{mm}' DD='{dd}' YYYY='{yyyy}'")
     else:
         print("DE debug -> Date of Incorporation split columns missing; leaving blank (optional unless required by site)")
@@ -152,30 +150,49 @@ async def _fill_de_holder_info_page(page: Page, record: Dict[str, Any], errors: 
         shares = _as_string(record.get("total_shares")) or "0"
         await _guarded(errors, "text 'Total Number of Shares Reported'", lambda: fill_text_field(page, "Total Number of Shares Reported", shares, "DE"))
 
-        owners = _as_string(record.get("total_number_of_owners_reported")) or "1"
+        owners = _as_string(record.get("number_of_owners")) or _as_string(record.get("total_number_of_owners_reported")) or "1"
+        print("DE debug -> field='Total Number of Owners Reported' mapped_from='number_of_owners'")
         await _guarded(errors, "text 'Total Number of Owners Reported'", lambda: fill_text_field(page, "Total Number of Owners Reported", owners, "DE"))
 
-        props = _as_string(record.get("total_number_of_properties_reported")) or _as_string(record.get("total_number_of_items_reported")) or "1"
+        props = _as_string(record.get("total_items_reported")) or _as_string(record.get("total_number_of_properties_reported")) or _as_string(record.get("total_number_of_items_reported")) or "1"
+        print("DE debug -> field='Total Number of Properties Reported' mapped_from='total_items_reported'")
         await _guarded(errors, "text 'Total Number of Properties Reported'", lambda: fill_text_field(page, "Total Number of Properties Reported", props, "DE"))
 
         remit = _normalize_remit_method(_as_string(record.get("funds_remitted_via")) or "Check")
         print(f"DE debug -> field='How are you Remitting Property' normalized='{remit}'")
         await _guarded(errors, "dropdown 'How are you Remitting Property'", lambda: select_dropdown_field(page, "How are you Remitting Property", remit, "DE"))
 
-    hipaa = _as_bool(record.get("includes_hipaa_records"))
+    hipaa = _as_bool(record.get("hipaa_privacy_rule"))
+    if hipaa is None:
+        hipaa = _as_bool(record.get("includes_hipaa_records"))
     if hipaa is None:
         hipaa = False
-    await _guarded(errors, "radio 'HIPAA Privacy Rule'", lambda: set_radio_field(page, "HIPAA Privacy Rule", hipaa, "DE"))
+    rendered = "Yes" if hipaa else "No"
+    print(f"DE debug -> field='HIPAA Privacy Rule' mapped_from='hipaa_privacy_rule' value='{rendered}'")
+    await _guarded(
+        errors,
+        "radio 'Does this report include records that are subject to the HIPAA Privacy Rule?'",
+        lambda: set_radio_field(page, "Does this report include records that are subject to the HIPAA Privacy Rule?", hipaa, "DE"),
+    )
 
 
-async def _set_date_part(page: Page, selector: str, value: str) -> None:
-    locator = page.locator(selector).first
+async def _set_date_part(locator: Any, value: str) -> None:
     try:
         await locator.select_option(value=value)
         return
     except Exception:
         pass
     await locator.select_option(label=value)
+
+
+async def _set_incorporation_date_parts(page: Page, mm: str, dd: str, yyyy: str) -> None:
+    row, _ = await locate_strict_row_for_label(page, "Date of Incorporation", "dropdown", "DE")
+    selects = row.locator("select")
+    if await selects.count() < 3:
+        raise DelawareAutomationError("Could not find all Date of Incorporation dropdowns for DE.")
+    await _set_date_part(selects.nth(0), mm)
+    await _set_date_part(selects.nth(1), dd)
+    await _set_date_part(selects.nth(2), yyyy)
 
 
 def _resolve_incorporation_date_parts(record: Dict[str, Any]) -> tuple[str, str, str]:
