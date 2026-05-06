@@ -114,8 +114,8 @@ async def _fill_de_holder_info_page(page: Page, record: Dict[str, Any], errors: 
         try:
             await _set_incorporation_date_parts(page, mm, dd, yyyy)
             print(f"DE debug -> selected Date of Incorporation MM='{mm}' DD='{dd}' YYYY='{yyyy}'")
-        except Exception as exc:
-            errors.append(f"Failed to set custom Date of Incorporation dropdowns: {exc}")
+        except Exception:
+            print("DE debug -> skipping Date of Incorporation (optional field)")
     else:
         print("DE debug -> Date of Incorporation split columns missing; leaving blank (optional unless required by site)")
 
@@ -180,23 +180,14 @@ async def _fill_de_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     )
 
 
-async def _set_date_part(locator: Any, value: str) -> None:
-    try:
-        await locator.select_option(value=value)
-        return
-    except Exception:
-        pass
-    await locator.select_option(label=value)
-
-
 async def _set_incorporation_date_parts(page: Page, mm: str, dd: str, yyyy: str) -> None:
     row, _ = await locate_strict_row_for_label(page, "Date of Incorporation", "dropdown", "DE")
     selects = row.locator("select")
     if await selects.count() < 3:
         raise DelawareAutomationError("Could not find all Date of Incorporation dropdowns for DE.")
-    await _set_date_part(selects.nth(0), mm)
-    await _set_date_part(selects.nth(1), dd)
-    await _set_date_part(selects.nth(2), yyyy)
+    await selects.nth(0).select_option(value=str(mm))
+    await selects.nth(1).select_option(value=str(dd))
+    await selects.nth(2).select_option(value=str(yyyy))
 
 
 def _resolve_incorporation_date_parts(record: Dict[str, Any]) -> tuple[str, str, str]:
