@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
-from states.field_helpers import fill_text_field, select_dropdown_field, set_radio_field
+from states.field_helpers import fill_text_field, locate_strict_row_for_label, select_dropdown_field, set_radio_field
 
 NC_HOLDER_INFO_URL = "https://unclaimed.nccash.gov/app/holder-info"
 NC_FORCED_REPORT_TYPE = "Annual Cash Report"
@@ -77,11 +77,7 @@ async def _fill_nc_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     print("NC debug -> Report Type forced to 'Annual Cash Report'")
     await _guarded(errors, "dropdown 'Report Type'", lambda: select_dropdown_field(page, "Report Type", NC_FORCED_REPORT_TYPE, "NC"))
 
-    report_year = _as_string(record.get("report_year"))
-    if not report_year:
-        errors.append("report_year is required for 'Report Year'.")
-    else:
-        await _guarded(errors, "dropdown 'Report Year'", lambda: select_dropdown_field(page, "Report Year", report_year, "NC"))
+    await _set_report_year_if_enabled(page, _as_string(record.get("report_year")))
 
     negative = _as_bool(record.get("negative_report"))
     if negative is None:
@@ -103,6 +99,46 @@ async def _fill_nc_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     if hipaa is None:
         hipaa = False
     await _guarded(errors, f"radio '{NC_HIPAA_LABEL}'", lambda: set_radio_field(page, NC_HIPAA_LABEL, hipaa, "NC"))
+
+
+async def _set_report_year_if_enabled(page: Page, report_year: str) -> None:
+    try:
+        row, _ = await locate_strict_row_for_label(page, "Report Year", "dropdown", "NC")
+        locator = row.locator("select").first
+        if await locator.count() <= 0:
+            return
+
+        disabled_or_readonly = await locator.evaluate(
+            """
+            el => Boolean(
+                el.disabled ||
+                el.readOnly ||
+                el.getAttribute('readonly') !== null ||
+                el.getAttribute('disabled') !== null ||
+                el.getAttribute('aria-disabled') === 'true'
+            )
+            """
+        )
+        if disabled_or_readonly:
+            print("NC debug -> skipping Report Year (disabled field)")
+            return
+
+        if not report_year:
+            print("NC debug -> skipping Report Year (blank value)")
+            return
+
+        try:
+            await locator.select_option(value=report_year)
+            return
+        except Exception:
+            pass
+
+        try:
+            await locator.select_option(label=report_year)
+        except Exception:
+            print("NC debug -> skipping Report Year (selection failed)")
+    except Exception:
+        print("NC debug -> skipping Report Year (disabled field)")
 
 
 async def _set_negative_report(page: Page, value: bool, errors: list[str]) -> None:
