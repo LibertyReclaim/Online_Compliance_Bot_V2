@@ -110,8 +110,12 @@ async def _fill_de_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     mm, dd, yyyy = _resolve_incorporation_date_parts(record)
     if mm and dd and yyyy:
         print(f"DE debug -> Date of Incorporation split columns MM='{mm}' DD='{dd}' YYYY='{yyyy}'")
-        await _guarded(errors, "dropdown 'Date of Incorporation MM/DD/YYYY'", lambda: _set_incorporation_date_parts(page, mm, dd, yyyy))
-        print(f"DE debug -> selected Date of Incorporation MM='{mm}' DD='{dd}' YYYY='{yyyy}'")
+        print("DE debug -> using custom Date of Incorporation dropdown handler")
+        try:
+            await _set_incorporation_date_parts(page, mm, dd, yyyy)
+            print(f"DE debug -> selected Date of Incorporation MM='{mm}' DD='{dd}' YYYY='{yyyy}'")
+        except Exception as exc:
+            errors.append(f"Failed to set custom Date of Incorporation dropdowns: {exc}")
     else:
         print("DE debug -> Date of Incorporation split columns missing; leaving blank (optional unless required by site)")
 
