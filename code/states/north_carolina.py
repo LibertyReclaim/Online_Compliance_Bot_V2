@@ -12,7 +12,7 @@ from states.field_helpers import fill_text_field, locate_strict_row_for_label, s
 
 NC_HOLDER_INFO_URL = "https://unclaimed.nccash.gov/app/holder-info"
 NC_FORCED_REPORT_TYPE = "Annual Cash Report"
-NC_HIPAA_LABEL = "Does this report include records that are subject to the HIPAA Privacy Rule"
+NC_HIPAA_LABEL = "Does this report include records that are subject to the HIPAA Privacy Rule?"
 
 
 class NorthCarolinaAutomationError(RuntimeError):
@@ -32,8 +32,8 @@ _TEXT_FIELDS: tuple[_TextFieldSpec, ...] = (
     _TextFieldSpec("Contact Name", "contact_name", required=True),
     _TextFieldSpec("Contact Phone Number", "contact_phone", required=True),
     _TextFieldSpec("Phone Extension", "phone_extension"),
-    _TextFieldSpec("Email Address", "email", required=True),
-    _TextFieldSpec("Email Address Confirmation", "email", required=True),
+    _TextFieldSpec("Email", "email", required=True),
+    _TextFieldSpec("Email Confirmation", "email_confirmation", required=True),
 )
 
 
@@ -85,10 +85,11 @@ async def _fill_nc_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     await _set_negative_report(page, negative, errors)
 
     if not negative:
-        amount = _as_string(record.get("total_dollar_amount_remitted"))
+        amount = _as_string(record.get("amount_to_remit"))
         if not amount:
-            errors.append("total_dollar_amount_remitted is required for 'Total Dollar Amount Remitted'.")
+            errors.append("amount_to_remit is required for 'Total Dollar Amount Remitted'.")
         else:
+            print("NC debug -> field='Total Dollar Amount Remitted' mapped_from='amount_to_remit'")
             await _guarded(errors, "text 'Total Dollar Amount Remitted'", lambda: fill_text_field(page, "Total Dollar Amount Remitted", amount, "NC"))
 
         funds = _normalize_funds(_as_string(record.get("funds_remitted_via")) or "Check")
