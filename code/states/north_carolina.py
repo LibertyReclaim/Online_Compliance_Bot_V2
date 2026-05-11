@@ -65,9 +65,7 @@ async def run(
 
 async def _fill_nc_holder_info_page(page: Page, record: Dict[str, Any], errors: list[str]) -> None:
     for field in _TEXT_FIELDS:
-        value = _as_string(record.get(field.key))
-        if field.key == "holder_tax_id" and not value:
-            value = _as_string(record.get("fein"))
+        value = _resolve_text_field_value(record, field)
         if not value:
             if field.required:
                 errors.append(f"{field.key} is required for '{field.label}'.")
@@ -100,6 +98,18 @@ async def _fill_nc_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     if hipaa is None:
         hipaa = False
     await _guarded(errors, f"radio '{NC_HIPAA_LABEL}'", lambda: set_radio_field(page, NC_HIPAA_LABEL, hipaa, "NC"))
+
+
+def _resolve_text_field_value(record: Dict[str, Any], field: _TextFieldSpec) -> str:
+    value = _as_string(record.get(field.key))
+    if field.key == "holder_tax_id" and not value:
+        return _as_string(record.get("fein"))
+    if field.key == "email_confirmation" and not value:
+        fallback_email = _as_string(record.get("email"))
+        if fallback_email:
+            print("NC debug -> Email Confirmation missing; using Email value")
+            return fallback_email
+    return value
 
 
 async def _set_report_year_if_enabled(page: Page, report_year: str) -> None:
