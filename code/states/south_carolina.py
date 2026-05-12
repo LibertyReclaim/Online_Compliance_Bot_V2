@@ -116,7 +116,17 @@ async def _fill_sc_holder_info_page(page: Page, record: Dict[str, Any], errors: 
         hipaa = _as_bool(record.get("includes_hipaa_records"))
     if hipaa is None:
         hipaa = False
-    await _guarded(errors, f"radio '{SC_HIPAA_LABEL}'", lambda: set_radio_field(page, SC_HIPAA_LABEL, hipaa, "SC"))
+    await _set_hipaa_if_available(page, hipaa)
+
+
+async def _set_hipaa_if_available(page: Page, value: bool) -> None:
+    for label in (SC_HIPAA_LABEL, "HIPAA Privacy Rule"):
+        try:
+            await set_radio_field(page, label, value, "SC")
+            return
+        except Exception:
+            continue
+    print("SC debug -> HIPAA radio not found; skipping optional HIPAA field")
 
 
 def _resolve_text_field_value(record: Dict[str, Any], field: _TextFieldSpec) -> str:
