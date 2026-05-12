@@ -44,9 +44,8 @@ async def run(
     *,
     wait_after_navigation_ms: int = 1500,
 ) -> None:
-    del naupa_file_path  # SC currently stops after reaching the upload page.
-
     record = _merge_records(holder_row, payment_row)
+    naupa_path = Path(naupa_file_path).expanduser().resolve()
 
     await page.goto(SC_HOLDER_INFO_URL, wait_until="domcontentloaded")
     await page.wait_for_timeout(wait_after_navigation_ms)
@@ -60,7 +59,7 @@ async def run(
 
     print("SC debug -> clicking Next after SC holder info completed")
     await click_next(page, "after SC holder info")
-    await _wait_for_upload_page(page)
+    await _upload_naupa_file(page, naupa_path)
 
 
 async def run_south_carolina(
@@ -183,8 +182,64 @@ async def _set_report_year_if_enabled(page: Page, report_year: str) -> None:
 async def _wait_for_upload_page(page: Page) -> None:
     try:
         await page.wait_for_url("**/app/holder-upload**", timeout=20_000)
+        print("SC debug -> reached holder-upload page")
+        return
+    except PlaywrightTimeoutError:
+        pass
+
+    for text in ("Upload File", "Upload This Report"):
+        locator = page.get_by_text(text, exact=False).first
+        try:
+            await locator.wait_for(state="visible", timeout=5_000)
+            print("SC debug -> reached holder-upload page")
+            return
+        except PlaywrightTimeoutError:
+            continue
+
+    raise SouthCarolinaAutomationError("SC did not reach holder-upload after holder info Next.")
+
+
+async def _upload_naupa_file(page: Page, file_path: Path) -> None:
+    await _wait_for_upload_page(page)
+
+    if not file_path.exists():
+        raise SouthCarolinaAutomationError(f"SC NAUPA file does not exist: {file_path}")
+
+    print(f"SC debug -> uploading NAUPA file: {file_path}")
+    selectors = ["input[type='file']", "input[type='file']:visible", "input[accept]", "input[type='file'][accept]"]
+    uploaded = False
+    for _ in range(3):
+        for selector in selectors:
+            locator = page.locator(selector)
+            if await locator.count() <= 0:
+                continue
+            try:
+                await locator.first.set_input_files(str(file_path))
+                uploaded = True
+                break
+            except Exception:
+                continue
+        if uploaded:
+            break
+        await page.wait_for_timeout(800)
+
+    if not uploaded:
+        raise SouthCarolinaAutomationError("Could not find SC upload file input.")
+
+    await page.wait_for_timeout(1500)
+    print("SC debug -> NAUPA uploaded; clicking upload-page Next")
+    await click_next(page, "after SC upload")
+    await _wait_for_preview_page(page)
+    print("SC debug -> reached holder-preview; waiting for manual signature")
+    print("SC finished - waiting for manual signature")
+
+
+async def _wait_for_preview_page(page: Page) -> None:
+    try:
+        await page.wait_for_url("**/app/holder-preview**", timeout=20_000)
+        return
     except PlaywrightTimeoutError as exc:
-        raise SouthCarolinaAutomationError("SC did not reach holder-upload after holder info Next.") from exc
+        raise SouthCarolinaAutomationError("SC upload did not reach holder-preview.") from exc
 
 
 async def click_next(page: Page, context: str) -> None:
