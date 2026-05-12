@@ -63,6 +63,23 @@ async def run(
     await _wait_for_upload_page(page)
 
 
+async def run_south_carolina(
+    page: Page,
+    holder_row: Dict[str, Any],
+    payment_row: Dict[str, Any],
+    naupa_file_path: str | Path,
+    *,
+    wait_after_navigation_ms: int = 1500,
+) -> None:
+    return await run(
+        page,
+        holder_row,
+        payment_row,
+        naupa_file_path,
+        wait_after_navigation_ms=wait_after_navigation_ms,
+    )
+
+
 async def _fill_sc_holder_info_page(page: Page, record: Dict[str, Any], errors: list[str]) -> None:
     for field in _TEXT_FIELDS:
         value = _resolve_text_field_value(record, field)
