@@ -27,12 +27,17 @@ class _TextFieldSpec:
 
 _TEXT_FIELDS: tuple[_TextFieldSpec, ...] = (
     _TextFieldSpec("Holder Name", "holder_name", required=True),
-    _TextFieldSpec("Holder Tax ID", "holder_tax_id", required=True),
-    _TextFieldSpec("Contact Name", "contact_name", required=True),
-    _TextFieldSpec("Contact Phone Number", "contact_phone", required=True),
+    _TextFieldSpec("Federal ID Number", "federal_id_number", required=True),
+    _TextFieldSpec("Holder ID", "holder_id"),
+    _TextFieldSpec("Contact Person", "contact_name", required=True),
+    _TextFieldSpec("Telephone Number", "contact_phone", required=True),
     _TextFieldSpec("Phone Extension", "phone_extension"),
     _TextFieldSpec("Email", "email", required=True),
     _TextFieldSpec("Email Confirmation", "email_confirmation", required=True),
+    _TextFieldSpec("Address 1", "address_1", required=True),
+    _TextFieldSpec("Address 2", "address_2"),
+    _TextFieldSpec("City", "city", required=True),
+    _TextFieldSpec("ZIP Code", "zip", required=True),
 )
 
 
@@ -81,14 +86,22 @@ async def run_louisiana(
 
 async def _fill_la_holder_info_page(page: Page, record: Dict[str, Any], errors: list[str]) -> None:
     for field in _TEXT_FIELDS:
-        value = _resolve_text_field_value(record, field)
+        value, mapped_from = _resolve_text_field_value(record, field)
         if not value:
             if field.required:
                 errors.append(f"{field.key} is required for '{field.label}'.")
             continue
+        print(f"LA debug -> field='{field.label}' mapped_from='{mapped_from}' value='{value}'")
         await _guarded(errors, f"text '{field.label}'", lambda f=field, v=value: fill_text_field(page, f.label, v, "LA"))
 
-    state_incorporation = _as_string(record.get("state_incorporation")) or _as_string(record.get("state_of_incorporation"))
+    state_value = _as_string(record.get("state"))
+    if state_value:
+        print(f"LA debug -> field='State' mapped_from='state' value='{state_value}'")
+        await _guarded(errors, "dropdown 'State'", lambda: select_dropdown_field(page, "State", state_value, "LA"))
+    else:
+        errors.append("state is required for 'State'.")
+
+    state_incorporation = _as_string(record.get("state_incorporation"))
     if state_incorporation:
         print(f"LA debug -> State of Incorporation from Excel='{state_incorporation}'")
         await _guarded(
@@ -97,31 +110,32 @@ async def _fill_la_holder_info_page(page: Page, record: Dict[str, Any], errors: 
             lambda: select_dropdown_field(page, "State of Incorporation", state_incorporation, "LA"),
         )
 
-    report_type = _normalize_report_type(_as_string(record.get("report_type")))
+    report_type = _as_string(record.get("report_type"))
     if report_type:
+        print(f"LA debug -> field='Report Type' mapped_from='report_type' value='{report_type}'")
         await _guarded(errors, "dropdown 'Report Type'", lambda: select_dropdown_field(page, "Report Type", report_type, "LA"))
+    else:
+        errors.append("report_type is required for 'Report Type'.")
 
     await _set_report_year_if_enabled(page, _as_string(record.get("report_year")))
 
     negative = _as_bool(record.get("negative_report"))
     if negative is None:
         negative = False
+    print(f"LA debug -> field='This is a Negative Report' mapped_from='negative_report' value='{('Yes' if negative else 'No')}'")
     await _set_negative_report(page, negative, errors)
 
     if not negative:
+        shares = _as_string(record.get("total_shares")) or "0"
+        print(f"LA debug -> Number of Shares Reported mapped from total_shares='{shares}'")
+        await _guarded(errors, "text 'Number of Shares Reported'", lambda: fill_text_field(page, "Number of Shares Reported", shares, "LA"))
+
         amount = _as_string(record.get("amount_to_remit"))
         if not amount:
             errors.append("amount_to_remit is required for 'Total Dollar Amount Remitted'.")
         else:
             print(f"LA debug -> Total Dollar Amount Remitted mapped from amount_to_remit='{amount}'")
             await _guarded(errors, "text 'Total Dollar Amount Remitted'", lambda: fill_text_field(page, "Total Dollar Amount Remitted", amount, "LA"))
-
-        shares = _as_string(record.get("total_shares")) or "0"
-        print(f"LA debug -> Number of Shares Reported mapped from total_shares='{shares}'")
-        await _guarded(errors, "text 'Number of Shares Reported'", lambda: fill_text_field(page, "Number of Shares Reported", shares, "LA"))
-
-        funds = _normalize_funds(_as_string(record.get("funds_remitted_via")))
-        await _guarded(errors, "dropdown 'Funds Remitted Via'", lambda: select_dropdown_field(page, "Funds Remitted Via", funds, "LA"))
 
     hipaa_raw = _as_string(record.get("hipaa_privacy_rule")) or _as_string(record.get("includes_hipaa_records"))
     hipaa = _as_bool(hipaa_raw)
@@ -131,16 +145,18 @@ async def _fill_la_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     await _set_hipaa_if_available(page, hipaa)
 
 
-def _resolve_text_field_value(record: Dict[str, Any], field: _TextFieldSpec) -> str:
+def _resolve_text_field_value(record: Dict[str, Any], field: _TextFieldSpec) -> tuple[str, str]:
     value = _as_string(record.get(field.key))
-    if field.key == "holder_tax_id" and not value:
-        return _as_string(record.get("fein"))
+    mapped_from = field.key
+    if field.key == "federal_id_number" and not value:
+        value = _as_string(record.get("holder_tax_id"))
+        mapped_from = "holder_tax_id" if value else "federal_id_number"
     if field.key == "email_confirmation" and not value:
         fallback_email = _as_string(record.get("email"))
         if fallback_email:
             print("LA debug -> Email Confirmation missing; using Email value")
-            return fallback_email
-    return value
+            return fallback_email, "email"
+    return value, mapped_from
 
 
 async def _set_report_year_if_enabled(page: Page, report_year: str) -> None:
@@ -168,6 +184,7 @@ async def _set_report_year_if_enabled(page: Page, report_year: str) -> None:
         if not report_year:
             return
 
+        print(f"LA debug -> field='Report Year' mapped_from='report_year' value='{report_year}'")
         try:
             await locator.select_option(value=report_year)
             return
@@ -189,7 +206,7 @@ async def _set_negative_report(page: Page, value: bool, errors: list[str]) -> No
     except Exception:
         pass
 
-    await _guarded(errors, "radio 'Is this a negative report?'", lambda: set_radio_field(page, "Is this a negative report?", value, "LA"))
+    await _guarded(errors, "radio 'This is a Negative Report'", lambda: set_radio_field(page, "Is this a negative report?", value, "LA"))
 
 
 async def _set_hipaa_if_available(page: Page, value: bool) -> None:
@@ -302,27 +319,6 @@ async def _guarded(errors: list[str], field_desc: str, action: Any) -> None:
         errors.append(f"Failed to set {field_desc}: {exc}")
 
 
-def _normalize_report_type(raw_value: str) -> str:
-    mapping = {
-        "annual": "Annual Report",
-        "annual report": "Annual Report",
-    }
-    return mapping.get(_normalize(raw_value), raw_value)
-
-
-def _normalize_funds(raw_value: str) -> str:
-    mapping = {
-        "check": "Check",
-        "ach": "ACH",
-        "wire": "Wire",
-        "wire transfer": "Wire",
-        "online": "Online",
-        "electronic": "Online",
-    }
-    normalized = _normalize(raw_value)
-    return mapping.get(normalized, raw_value or "Check")
-
-
 def _merge_records(holder_row: Dict[str, Any], payment_row: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(holder_row)
     merged.update(payment_row)
@@ -347,7 +343,3 @@ def _as_bool(value: Any) -> Optional[bool]:
     if normalized in {"no", "n", "false", "0"}:
         return False
     return None
-
-
-def _normalize(text: str) -> str:
-    return " ".join(str(text).replace("*", "").replace(":", "").strip().lower().split())
