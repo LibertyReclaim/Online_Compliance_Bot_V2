@@ -10,7 +10,7 @@ from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
 from states.field_helpers import fill_text_field, locate_strict_row_for_label, select_dropdown_field, set_radio_field
 
-MN_HOLDER_INFO_URL = "https://minnesota.findyourunclaimedproperty.com/app/holder-info"
+MN_HOLDER_INFO_URL = "https://unclaimedproperty.mn.gov/app/holder-info"
 
 
 class MinnesotaAutomationError(RuntimeError):
