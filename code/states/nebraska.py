@@ -1,4 +1,4 @@
-"""Minnesota filing runner for the Online_Compliance_Bot project."""
+"""Nebraska filing runner for the Online_Compliance_Bot project."""
 
 from __future__ import annotations
 
@@ -10,11 +10,11 @@ from playwright.async_api import Page, TimeoutError as PlaywrightTimeoutError
 
 from states.field_helpers import fill_text_field, locate_strict_row_for_label, select_dropdown_field, set_radio_field
 
-MN_HOLDER_INFO_URL = "https://minnesota.findyourunclaimedproperty.com/app/holder-info"
+NE_HOLDER_INFO_URL = "https://nebraskalostcash.nebraska.gov/app/holder-info"
 
 
-class MinnesotaAutomationError(RuntimeError):
-    """Raised when MN automation cannot reliably continue."""
+class NebraskaAutomationError(RuntimeError):
+    """Raised when NE automation cannot reliably continue."""
 
 
 @dataclass(frozen=True)
@@ -47,22 +47,22 @@ async def run(
     record = _merge_records(holder_row, payment_row)
     naupa_path = Path(naupa_file_path).expanduser().resolve()
 
-    await page.goto(MN_HOLDER_INFO_URL, wait_until="domcontentloaded")
+    await page.goto(NE_HOLDER_INFO_URL, wait_until="domcontentloaded")
     await page.wait_for_timeout(wait_after_navigation_ms)
     await page.get_by_label("Holder Name").first.wait_for(timeout=20_000)
 
     errors: list[str] = []
-    await _fill_mn_holder_info_page(page, record, errors)
+    await _fill_ne_holder_info_page(page, record, errors)
 
     if errors:
-        raise MinnesotaAutomationError("MN holder-info form completed with errors:\n- " + "\n- ".join(errors))
+        raise NebraskaAutomationError("NE holder-info form completed with errors:\n- " + "\n- ".join(errors))
 
-    print("MN debug -> clicking holder-info NEXT")
-    await click_next(page, "after MN holder info")
+    print("NE debug -> clicking holder-info NEXT")
+    await click_next(page, "after NE holder info")
     await _upload_naupa_file(page, naupa_path)
 
 
-async def run_minnesota(
+async def run_nebraska(
     page: Page,
     holder_row: Dict[str, Any],
     payment_row: Dict[str, Any],
@@ -79,7 +79,7 @@ async def run_minnesota(
     )
 
 
-async def _fill_mn_holder_info_page(page: Page, record: Dict[str, Any], errors: list[str]) -> None:
+async def _fill_ne_holder_info_page(page: Page, record: Dict[str, Any], errors: list[str]) -> None:
     for field in _TEXT_FIELDS:
         value = _as_string(record.get(field.key))
         if not value:
@@ -87,14 +87,14 @@ async def _fill_mn_holder_info_page(page: Page, record: Dict[str, Any], errors: 
                 errors.append(f"{field.key} is required for '{field.label}'.")
             continue
         _print_text_debug(field, value)
-        await _guarded(errors, f"text '{field.label}'", lambda f=field, v=value: fill_text_field(page, f.label, v, "MN"))
+        await _guarded(errors, f"text '{field.label}'", lambda f=field, v=value: fill_text_field(page, f.label, v, "NE"))
 
     report_type = _as_string(record.get("report_type"))
     if not report_type:
         errors.append("report_type is required for 'Report Type'.")
     else:
-        print(f"MN debug -> Report Type mapped from report_type='{report_type}'")
-        await _guarded(errors, "dropdown 'Report Type'", lambda: select_dropdown_field(page, "Report Type", report_type, "MN"))
+        print(f"NE debug -> Report Type mapped from report_type='{report_type}'")
+        await _guarded(errors, "dropdown 'Report Type'", lambda: select_dropdown_field(page, "Report Type", report_type, "NE"))
 
     await _set_report_year_if_enabled(page, _as_string(record.get("report_year")), errors)
 
@@ -102,28 +102,27 @@ async def _fill_mn_holder_info_page(page: Page, record: Dict[str, Any], errors: 
     if negative is None:
         errors.append("negative_report is required for 'This is a Negative Report' and must be Yes or No.")
         negative = False
-    print(f"MN debug -> Negative Report mapped from negative_report='{('Yes' if negative else 'No')}'")
-    await _guarded(errors, "radio 'This is a Negative Report'", lambda: set_radio_field(page, "This is a Negative Report", negative, "MN"))
+    print(f"NE debug -> Negative Report mapped from negative_report='{('Yes' if negative else 'No')}'")
+    await _guarded(errors, "radio 'This is a Negative Report'", lambda: set_radio_field(page, "This is a Negative Report", negative, "NE"))
 
     if not negative:
         amount = _as_string(record.get("amount_to_remit"))
         if not amount:
             errors.append("amount_to_remit is required for 'Total Dollar Amount Remitted'.")
         else:
-            print(f"MN debug -> Total Dollar Amount Remitted mapped from amount_to_remit='{amount}'")
-            await _guarded(errors, "text 'Total Dollar Amount Remitted'", lambda: fill_text_field(page, "Total Dollar Amount Remitted", amount, "MN"))
+            print(f"NE debug -> Total Dollar Amount Remitted mapped from amount_to_remit='{amount}'")
+            await _guarded(errors, "text 'Total Dollar Amount Remitted'", lambda: fill_text_field(page, "Total Dollar Amount Remitted", amount, "NE"))
 
-    funds = _as_string(record.get("funds_remitted_via"))
-    if funds:
-        print(f"MN debug -> Funds Remitted Via mapped from funds_remitted_via='{funds}'")
-        await _select_optional_dropdown_if_enabled(page, errors, "Funds Remitted Via", funds)
+    funds = _as_string(record.get("funds_remitted_via")) or "Online"
+    print(f"NE debug -> Funds Remitted Via mapped from funds_remitted_via='{funds}'")
+    await _select_optional_dropdown_if_enabled(page, errors, "Funds Remitted Via", funds)
 
 
 def _print_text_debug(field: _TextFieldSpec, value: str) -> None:
     if field.label == "Email Address Confirmation":
-        print(f"MN debug -> Email Address Confirmation reused from email='{value}'")
+        print(f"NE debug -> Email Address Confirmation reused from email='{value}'")
     else:
-        print(f"MN debug -> {field.label} mapped from {field.key}='{value}'")
+        print(f"NE debug -> {field.label} mapped from {field.key}='{value}'")
 
 
 async def _set_report_year_if_enabled(page: Page, report_year: str, errors: list[str]) -> None:
@@ -131,7 +130,7 @@ async def _set_report_year_if_enabled(page: Page, report_year: str, errors: list
 
     for control_type in ("text", "dropdown"):
         try:
-            row, _ = await locate_strict_row_for_label(page, "Report Year", control_type, "MN")
+            row, _ = await locate_strict_row_for_label(page, "Report Year", control_type, "NE")
             control = (
                 row.locator("input:not([type='hidden']):not([type='radio']):not([type='checkbox']), textarea").first
                 if control_type == "text"
@@ -140,17 +139,17 @@ async def _set_report_year_if_enabled(page: Page, report_year: str, errors: list
             if await control.count() <= 0:
                 return
             if await _is_disabled_or_readonly(control):
-                print("MN debug -> Report Year disabled; skipping")
+                print("NE debug -> Report Year disabled; skipping")
                 return
             if not report_year:
                 errors.append("report_year is required for 'Report Year'.")
                 return
 
-            print(f"MN debug -> Report Year mapped from report_year='{report_year}'")
+            print(f"NE debug -> Report Year mapped from report_year='{report_year}'")
             if control_type == "text":
-                await _guarded(errors, "text 'Report Year'", lambda: fill_text_field(page, "Report Year", report_year, "MN"))
+                await _guarded(errors, "text 'Report Year'", lambda: fill_text_field(page, "Report Year", report_year, "NE"))
             else:
-                await _guarded(errors, "dropdown 'Report Year'", lambda: select_dropdown_field(page, "Report Year", report_year, "MN"))
+                await _guarded(errors, "dropdown 'Report Year'", lambda: select_dropdown_field(page, "Report Year", report_year, "NE"))
             return
         except Exception as exc:
             last_error = exc
@@ -162,7 +161,7 @@ async def _set_report_year_if_enabled(page: Page, report_year: str, errors: list
 
 async def _select_optional_dropdown_if_enabled(page: Page, errors: list[str], label: str, value: str) -> None:
     try:
-        row, _ = await locate_strict_row_for_label(page, label, "dropdown", "MN")
+        row, _ = await locate_strict_row_for_label(page, label, "dropdown", "NE")
         control = row.locator("select").first
         if await control.count() <= 0:
             return
@@ -171,7 +170,7 @@ async def _select_optional_dropdown_if_enabled(page: Page, errors: list[str], la
     except Exception:
         return
 
-    await _guarded(errors, f"dropdown '{label}'", lambda: select_dropdown_field(page, label, value, "MN"))
+    await _guarded(errors, f"dropdown '{label}'", lambda: select_dropdown_field(page, label, value, "NE"))
 
 
 async def _is_disabled_or_readonly(locator: Any) -> bool:
@@ -193,7 +192,7 @@ async def _is_disabled_or_readonly(locator: Any) -> bool:
 async def _wait_for_upload_page(page: Page) -> None:
     try:
         await page.wait_for_url("**/app/holder-upload**", timeout=20_000)
-        print("MN debug -> reached holder-upload page")
+        print("NE debug -> reached holder-upload page")
         return
     except PlaywrightTimeoutError:
         pass
@@ -202,21 +201,21 @@ async def _wait_for_upload_page(page: Page) -> None:
         locator = page.get_by_text(text, exact=False).first
         try:
             await locator.wait_for(state="visible", timeout=5_000)
-            print("MN debug -> reached holder-upload page")
+            print("NE debug -> reached holder-upload page")
             return
         except PlaywrightTimeoutError:
             continue
 
-    raise MinnesotaAutomationError("MN did not reach holder-upload after holder info Next.")
+    raise NebraskaAutomationError("NE did not reach holder-upload after holder info Next.")
 
 
 async def _upload_naupa_file(page: Page, file_path: Path) -> None:
     await _wait_for_upload_page(page)
 
     if not file_path.exists():
-        raise MinnesotaAutomationError(f"MN NAUPA file does not exist: {file_path}")
+        raise NebraskaAutomationError(f"NE NAUPA file does not exist: {file_path}")
 
-    print(f"MN debug -> uploading MN NAUPA file: {file_path}")
+    print(f"NE debug -> uploading NE NAUPA file: {file_path}")
     selectors = ["input[type='file']", "input[type='file']:visible", "input[accept]", "input[type='file'][accept]"]
     uploaded = False
     for _ in range(3):
@@ -235,14 +234,14 @@ async def _upload_naupa_file(page: Page, file_path: Path) -> None:
         await page.wait_for_timeout(800)
 
     if not uploaded:
-        raise MinnesotaAutomationError("Could not find MN upload file input.")
+        raise NebraskaAutomationError("Could not find NE upload file input.")
 
     await page.wait_for_timeout(1500)
-    print("MN debug -> clicking upload-page NEXT")
-    await click_next(page, "after MN upload")
+    print("NE debug -> clicking upload-page NEXT")
+    await click_next(page, "after NE upload")
     await _wait_for_preview_or_signature(page)
-    print("MN debug -> reached holder-preview page")
-    print("MN finished - waiting for manual signature")
+    print("NE debug -> reached holder-preview page")
+    print("NE finished - waiting for manual signature")
 
 
 async def _wait_for_preview_or_signature(page: Page) -> None:
@@ -256,7 +255,7 @@ async def _wait_for_preview_or_signature(page: Page) -> None:
     if await signature_text.first.count() > 0 and await signature_text.first.is_visible():
         return
 
-    raise MinnesotaAutomationError("MN upload did not reach holder-preview or signature prompt.")
+    raise NebraskaAutomationError("NE upload did not reach holder-preview or signature prompt.")
 
 
 async def click_next(page: Page, context: str) -> None:
@@ -278,7 +277,7 @@ async def click_next(page: Page, context: str) -> None:
             await target.click(timeout=10_000)
             await page.wait_for_timeout(1000)
             return
-    raise MinnesotaAutomationError(f"Could not find a clickable Next control {context}.")
+    raise NebraskaAutomationError(f"Could not find a clickable Next control {context}.")
 
 
 async def _guarded(errors: list[str], field_desc: str, action: Any) -> None:
