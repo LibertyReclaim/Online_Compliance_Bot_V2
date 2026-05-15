@@ -59,10 +59,10 @@ _STATE_DROPDOWNS: tuple[_DropdownSpec, ...] = (
     _DropdownSpec("State of Incorporation", "state_incorporation", holder_source=True),
 )
 
-_DATE_OF_INCORPORATION_DROPDOWNS: tuple[_DropdownSpec, ...] = (
-    _DropdownSpec("Date of Incorporation MM", "date_of_incorporation_month"),
-    _DropdownSpec("Date of Incorporation DD", "date_of_incorporation_day"),
-    _DropdownSpec("Date of Incorporation YYYY", "date_of_incorporation_year"),
+_DATE_OF_INCORPORATION_PARTS: tuple[tuple[str, str], ...] = (
+    ("MM", "date_of_incorporation_month"),
+    ("DD", "date_of_incorporation_day"),
+    ("YYYY", "date_of_incorporation_year"),
 )
 
 
@@ -119,7 +119,7 @@ async def _fill_nh_holder_info_page(
     await _fill_text_fields(page, record, errors, _CONTACT_TEXT_FIELDS)
     await _fill_text_fields(page, record, errors, _ADDRESS_TEXT_FIELDS)
     await _fill_state_dropdowns(page, holder_row, errors)
-    await _fill_date_of_incorporation_dropdowns(page, record, errors)
+    await _fill_date_of_incorporation_dropdowns(page, record)
 
     report_type = _as_string(record.get("report_type"))
     if not report_type:
@@ -178,14 +178,80 @@ async def _fill_state_dropdowns(page: Page, holder_row: Dict[str, Any], errors: 
         await _guarded(errors, f"dropdown '{dropdown.label}'", lambda d=dropdown, v=value: select_dropdown_field(page, d.label, v, "NH"))
 
 
-async def _fill_date_of_incorporation_dropdowns(page: Page, record: Dict[str, Any], errors: list[str]) -> None:
-    for dropdown in _DATE_OF_INCORPORATION_DROPDOWNS:
-        value = _as_string(record.get(dropdown.key))
-        if not value:
+async def _fill_date_of_incorporation_dropdowns(page: Page, record: Dict[str, Any]) -> None:
+    values = tuple(_as_string(record.get(key)) for _, key in _DATE_OF_INCORPORATION_PARTS)
+    if not any(values):
+        return
+
+    print(f"NH debug -> Date of Incorporation split columns MM='{values[0]}' DD='{values[1]}' YYYY='{values[2]}'")
+
+    try:
+        row = await _locate_date_of_incorporation_row(page)
+        selects = row.locator("select")
+        select_count = await selects.count()
+        if select_count < 3:
+            print(f"NH warning -> Date of Incorporation row has {select_count} dropdown(s); expected 3. Skipping optional field.")
+            return
+
+        for index, (suffix, _) in enumerate(_DATE_OF_INCORPORATION_PARTS):
+            value = values[index]
+            if not value:
+                continue
+            try:
+                await _select_option_by_value_or_label(selects.nth(index), value)
+                print(f"NH debug -> selected Date of Incorporation {suffix}='{value}'")
+            except Exception as exc:
+                print(f"NH warning -> failed to select Date of Incorporation {suffix}='{value}': {exc}")
+    except Exception as exc:
+        print(f"NH warning -> failed to set optional Date of Incorporation: {exc}")
+
+
+async def _locate_date_of_incorporation_row(page: Page) -> Any:
+    label_nodes = page.locator(
+        "xpath=//*[self::label or self::span or self::div or self::p or self::strong or self::b or self::td]"
+        "[translate(normalize-space(string(.)), '*:ABCDEFGHIJKLMNOPQRSTUVWXYZ', '  abcdefghijklmnopqrstuvwxyz')='date of incorporation']"
+    )
+    count = await label_nodes.count()
+    for i in range(count):
+        label_node = label_nodes.nth(i)
+        try:
+            if not await label_node.is_visible():
+                continue
+        except Exception:
             continue
-        suffix = dropdown.label.rsplit(" ", 1)[-1]
-        print(f"NH debug -> Date of Incorporation {suffix}='{value}'")
-        await _guarded(errors, f"dropdown '{dropdown.label}'", lambda d=dropdown, v=value: select_dropdown_field(page, d.label, v, "NH"))
+
+        ancestor_candidates = (
+            label_node.locator("xpath=ancestor::div[1]").first,
+            label_node.locator("xpath=ancestor::*[contains(@class,'form-group')][1]").first,
+            label_node.locator("xpath=ancestor::*[contains(@class,'row')][1]").first,
+            label_node.locator("xpath=ancestor::td[1]").first,
+            label_node.locator("xpath=ancestor::tr[1]").first,
+            label_node.locator("xpath=ancestor::li[1]").first,
+            label_node.locator("xpath=ancestor::div[2]").first,
+            label_node.locator("xpath=ancestor::div[3]").first,
+            label_node.locator("xpath=ancestor::div[4]").first,
+            label_node.locator("xpath=ancestor::div[5]").first,
+        )
+
+        for row in ancestor_candidates:
+            try:
+                if await row.count() <= 0:
+                    continue
+                if await row.locator("select").count() >= 3:
+                    return row
+            except Exception:
+                continue
+
+    raise NewHampshireAutomationError("Unable to locate Date of Incorporation row with three dropdowns.")
+
+
+async def _select_option_by_value_or_label(select_locator: Any, value: str) -> None:
+    rendered = str(value)
+    try:
+        await select_locator.select_option(value=rendered)
+        return
+    except Exception:
+        await select_locator.select_option(label=rendered)
 
 
 def _print_text_debug(field: _TextFieldSpec, value: str) -> None:
