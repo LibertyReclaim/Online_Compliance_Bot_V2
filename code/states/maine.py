@@ -40,7 +40,7 @@ _TEXT_FIELDS: tuple[_TextFieldSpec, ...] = (
     _TextFieldSpec("City", "city", required=True),
     _TextFieldSpec("Zip", "zip", required=True),
     _TextFieldSpec("Total Number of Items Reported", "total_items_reported", required=True),
-    _TextFieldSpec("Safekeeping Items", "total_safekeeping_items", required=True),
+    _TextFieldSpec("Safekeeping Items", "safekeeping_items", required=True),
     _TextFieldSpec("Shares of Stocks or Mutual Funds Remitted", "shares_remitted", required=True),
     _TextFieldSpec("Total Dollar Amount Remitted", "amount_to_remit", required=True),
 )
@@ -95,7 +95,7 @@ async def _fill_me_holder_info_page(page: Page, holder_row: Dict[str, Any], reco
         negative = False
 
     for field in _TEXT_FIELDS:
-        if negative and field.key in {"total_items_reported", "total_safekeeping_items", "shares_remitted", "amount_to_remit"}:
+        if negative and field.key in {"total_items_reported", "safekeeping_items", "shares_remitted", "amount_to_remit"}:
             continue
 
         value = _as_string(record.get(field.key))
@@ -131,7 +131,7 @@ async def _fill_me_holder_info_page(page: Page, holder_row: Dict[str, Any], reco
         errors.append("type_of_business is required for 'Type of Business'.")
     else:
         print(f"ME debug -> Type of Business mapped from type_of_business='{type_of_business}'")
-        await _guarded(errors, "dropdown 'Type of Business'", lambda: select_dropdown_field(page, "Type of Business", type_of_business, "ME"))
+        await _guarded(errors, "text 'Type of Business'", lambda: fill_text_field(page, "Type of Business", type_of_business, "ME"))
 
     report_type = _as_string(record.get("report_type"))
     if not report_type:
